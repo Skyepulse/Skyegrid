@@ -1,1 +1,3 @@
-./build
+#Ignore build folder
+build/
+*.bat

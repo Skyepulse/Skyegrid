@@ -237,7 +237,7 @@ int main()
     cout << "Compute test completed." << endl;
 
 #if defined(__EMSCRIPTEN__)
-  emscripten_set_main_loop(Render, 0, true);
+    emscripten_set_main_loop(Render, 0, true);
 #else
     while (!glfwWindowShouldClose(window))
     {

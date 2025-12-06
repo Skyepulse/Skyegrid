@@ -9,6 +9,10 @@
 #include <dawn/webgpu_cpp_print.h>
 #include <webgpu/webgpu_glfw.h>
 
+#include <Eigen/Core>
+
+#include "src/computeTest.h"
+
 const uint32_t kWidth = 512;
 const uint32_t kHeight = 512;
 
@@ -24,6 +28,8 @@ Surface surface;
 TextureFormat swapchainFormat;
 
 RenderPipeline pipeline;
+
+ComputeTest computeTest;
 
 const char ShaderCode[] = R"(
     @vertex
@@ -46,11 +52,22 @@ const char ShaderCode[] = R"(
 
 void InitWebGPU()
 {
+    computeTest = ComputeTest();
+
     // Create instance
     static const auto kTimeWaitAny = InstanceFeatureName::TimedWaitAny;
     InstanceDescriptor descriptor;
     descriptor.requiredFeatureCount = 1;
     descriptor.requiredFeatures = &kTimeWaitAny;
+
+    Limits limits{};
+    limits.maxStorageBuffersPerShaderStage = 2;
+    limits.maxStorageBufferBindingSize = computeTest.bufferSize;
+    limits.maxComputeWorkgroupSizeX = 32;
+    limits.maxComputeWorkgroupSizeY = 1;
+    limits.maxComputeWorkgroupSizeZ = 1;
+    limits.maxComputeInvocationsPerWorkgroup = 32;
+    limits.maxComputeWorkgroupsPerDimension = 2;
 
     instance = CreateInstance(&descriptor);
 
@@ -73,6 +90,7 @@ void InitWebGPU()
     instance.WaitAny(f1, UINT64_MAX); // Timeout to max
 
     DeviceDescriptor deviceDesc{};
+    deviceDesc.requiredLimits = &limits;
     deviceDesc.SetUncapturedErrorCallback(
         [](const Device&, ErrorType errorType, StringView message)
         {
@@ -94,6 +112,11 @@ void InitWebGPU()
         }
     );
     instance.WaitAny(f2, UINT64_MAX); // Timeout to max
+
+    computeTest.initBuffers(device);
+    computeTest.createBindGroupLayout(device);
+    computeTest.createBindGroup(device);
+    computeTest.createComputePipeline(device);
 }
 
 void ConfigureSurface()
@@ -200,8 +223,21 @@ int main()
     cout << "Using device: " << info.device << endl;
     cout << "Backend: " << static_cast<uint32_t>(info.backendType) << endl;
 
+    cout << "Testing eigen..." << endl;
+    Eigen::MatrixXd mat(2,2);
+    mat(0,0) = 3;
+    mat(1,0) = 2.5;
+    mat(0,1) = -1;
+    mat(1,1) = mat(1,0) + mat(0,1);
+    cout << mat << endl;
+    cout << "Starting main loop..." << endl;
+
+    cout << "Running compute test..." << endl;
+    computeTest.OnCompute(instance, device);
+    cout << "Compute test completed." << endl;
+
 #if defined(__EMSCRIPTEN__)
-  emscripten_set_main_loop(Render, 0, false);
+  emscripten_set_main_loop(Render, 0, true);
 #else
     while (!glfwWindowShouldClose(window))
     {
@@ -212,6 +248,10 @@ int main()
     }
 #endif
 
-    cout << "Hello, Skyegrid!" << endl;
+    glfwDestroyWindow(window);
+    glfwTerminate();
+
+    cout << "Bye, Skyegrid!" << endl;
+
     return 0;
 }

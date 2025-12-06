@@ -9,8 +9,6 @@ endif()
 
 set(SRC_FILES
   main.cpp
-  src/computeTest.cpp
-  src/computeTest.h
 )
 
 add_executable(Skyegrid ${SRC_FILES})
@@ -27,7 +25,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(libigl)
 
 # Dawn specifics
-set(DAWN_ROOT "${CMAKE_SOURCE_DIR}/../dawn")
+set(DAWN_ROOT "${CMAKE_SOURCE_DIR}/dawn")
 set(DAWN_FETCH_DEPENDENCIES ON CACHE BOOL "" FORCE) # Fetch all dawn dependencies
 set(DAWN_USE_BUILT_DXC ON CACHE BOOL "" FORCE)
 

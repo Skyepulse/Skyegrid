@@ -9,6 +9,11 @@ endif()
 
 set(SRC_FILES
   main.cpp
+  includes/Rendering/wgpuBundle.hpp
+  src/Rendering/wgpuBundle.cpp
+  includes/Rendering/wgpuHelpers.hpp
+  src/Rendering/wgpuHelpers.cpp
+  includes/Rendering/Pipelines/pipelines.hpp
 )
 
 add_executable(Skyegrid ${SRC_FILES})
@@ -32,21 +37,32 @@ set(DAWN_USE_BUILT_DXC ON CACHE BOOL "" FORCE)
 add_subdirectory("${DAWN_ROOT}" "${CMAKE_BINARY_DIR}/dawn_build" EXCLUDE_FROM_ALL) # Exclude from all in order to not build dawn by default
 
 if(EMSCRIPTEN)
+
   set(DCMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "" FORCE) # Disable C++ modules for Emscripten
   set_target_properties(Skyegrid PROPERTIES SUFFIX ".html")
   target_link_libraries(Skyegrid PRIVATE emdawnwebgpu_cpp webgpu_glfw igl::core)
-  target_link_options(Skyegrid PRIVATE "-sASYNCIFY=1" "-sUSE_GLFW=3")
+  target_link_options(Skyegrid PRIVATE "-sASYNCIFY=1" "-sUSE_GLFW=3" "--preload-file=${CMAKE_SOURCE_DIR}/Shaders@/Shaders")
+
 else()
-    target_link_libraries(
-            Skyegrid
-            PRIVATE
-        webgpu_dawn
-        webgpu_glfw
-        glfw
-        igl::core
-    )
+
+  target_link_libraries(
+          Skyegrid
+          PRIVATE
+      webgpu_dawn
+      webgpu_glfw
+      glfw
+      igl::core
+  )
+  
+  add_custom_command(TARGET Skyegrid POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      ${CMAKE_SOURCE_DIR}/Shaders
+      $<TARGET_FILE_DIR:Skyegrid>/Shaders
+  )
+
 endif()
 
-# On Linux they are sometimes required
-find_package(Threads REQUIRED)
-target_link_libraries(Skyegrid PRIVATE ${OPENGL_gl_LIBRARY} Threads::Threads)
+if(NOT EMSCRIPTEN)
+  find_package(Threads REQUIRED)
+  target_link_libraries(Skyegrid PRIVATE Threads::Threads)
+endif()

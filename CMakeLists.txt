@@ -14,6 +14,11 @@ set(SRC_FILES
   includes/Rendering/wgpuHelpers.hpp
   src/Rendering/wgpuHelpers.cpp
   includes/Rendering/Pipelines/pipelines.hpp
+  src/Rendering/Pipelines/pipelines.cpp
+  src/SkyegridManager.cpp
+  includes/SkyegridManager.hpp
+  src/Rendering/RenderEngine.cpp
+  includes/Rendering/RenderEngine.hpp
 )
 
 add_executable(Skyegrid ${SRC_FILES})

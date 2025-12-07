@@ -1,5 +1,6 @@
 #include "../../includes/Rendering/wgpuBundle.hpp"
 #include "../../includes/Rendering/wgpuHelpers.hpp"
+#include "../../includes/constants.hpp"
 
 #include <vector>
 #include <iostream>
@@ -7,6 +8,7 @@
 //================================//
 WgpuBundle::WgpuBundle(WindowFormat windowFormat) : window(windowFormat.window), currentWidth(windowFormat.width), currentHeight(windowFormat.height)
 {
+    this->ComputeLimits();
     this->InitializeInstance();
     this->surface = wgpu::glfw::CreateSurfaceForWindow(instance, window);
     this->InitializeGraphics();
@@ -30,9 +32,8 @@ void WgpuBundle::InitializeInstance()
         throw std::runtime_error("Failed to request WebGPU adapter.");
 
     // Device
-    wgpu::Limits limits{};
     wgpu::DeviceDescriptor deviceDesc{};
-    deviceDesc.requiredLimits = &limits;
+    deviceDesc.requiredLimits = &this->limits;
     deviceDesc.SetUncapturedErrorCallback(
         [](const wgpu::Device&, wgpu::ErrorType errorType, wgpu::StringView message)
         {
@@ -69,4 +70,31 @@ void WgpuBundle::ConfigureSurface()
     config.height = currentHeight;
 
     surface.Configure(&config);
+}
+
+//================================//
+void WgpuBundle::ComputeLimits()
+{
+    this->limits = {};
+
+    this->limits.maxStorageBuffersPerShaderStage = 0;
+    this->limits.maxStorageBufferBindingSize    = 0;
+
+    this->limits.maxStorageTexturesPerShaderStage = 2;
+
+    size_t maxTextureDimension3D = static_cast<size_t>(MAXIMUM_VOXEL_RESOLUTION / 4);
+    size_t maxTextureDimension2D = static_cast<size_t>(std::max(MAXIMUM_WINDOW_WIDTH, MAXIMUM_WINDOW_HEIGHT));
+    this->limits.maxTextureDimension3D = static_cast<uint32_t>(maxTextureDimension3D);
+    this->limits.maxTextureDimension2D = static_cast<uint32_t>(maxTextureDimension2D);
+
+    this->limits.maxUniformBuffersPerShaderStage = 1;
+    this->limits.maxUniformBufferBindingSize = 256;
+
+    // for now (8, 8, 1) workgroup size with 64 invocations
+    this->limits.maxComputeWorkgroupSizeX = 8;
+    this->limits.maxComputeWorkgroupSizeY = 8;
+    this->limits.maxComputeWorkgroupSizeZ = 1;
+    this->limits.maxComputeInvocationsPerWorkgroup = 64;
+
+    this->limits.maxComputeWorkgroupsPerDimension = 65535;
 }

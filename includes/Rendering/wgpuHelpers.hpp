@@ -13,4 +13,9 @@ int wgpuCreateDevice(const wgpu::Instance instance, const wgpu::Adapter& adapter
 int getShaderCodeFromFile(const std::string& filepath, std::string& outShaderCode);
 std::filesystem::path getExecutableDirectory();
 
+constexpr size_t AlignUp(size_t v, size_t a)
+{
+    return (v + a - 1) & ~(a - 1);
+}
+
 #endif // WGPU_HELPERS_HPP

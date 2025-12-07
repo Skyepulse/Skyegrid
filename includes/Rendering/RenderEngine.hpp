@@ -19,6 +19,7 @@ public:
     {
         this->wgpuBundle = bundle;
         CreateRenderPipelineDebug(*this->wgpuBundle, this->debugPipeline);
+        CreateComputeVoxelPipeline(*this->wgpuBundle, this->debugPipeline);
     };
     ~RenderEngine() = default;
 

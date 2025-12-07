@@ -19,6 +19,7 @@ set(SRC_FILES
   includes/SkyegridManager.hpp
   src/Rendering/RenderEngine.cpp
   includes/Rendering/RenderEngine.hpp
+  includes/constants.hpp
 )
 
 add_executable(Skyegrid ${SRC_FILES})

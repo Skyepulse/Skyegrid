@@ -27,6 +27,8 @@ public:
     wgpu::TextureFormat& GetSwapchainFormat() { return this->swapchainFormat; }
 
 private:
+    void ComputeLimits();
+    
     void InitializeInstance();
     void InitializeGraphics();
 
@@ -45,6 +47,8 @@ private:
     GLFWwindow* window;
     int currentWidth;
     int currentHeight;
+
+    wgpu::Limits limits;
 };
 
 #endif // WGPU_BUNDLE_HPP

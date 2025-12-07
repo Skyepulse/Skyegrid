@@ -20,6 +20,7 @@ void RenderEngine::Render(void* userData)
     wgpu::CommandEncoder encoder = this->wgpuBundle->GetDevice().CreateCommandEncoder();
     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPassDesc);
 
+    debugPipeline.AssertConsistent();
     pass.SetPipeline(debugPipeline.pipeline);
     pass.Draw(3); // Draw a triangle
     pass.End();

@@ -1,12 +1,10 @@
 #include "../includes/SkyegridManager.hpp"
+#include "../includes/constants.hpp"
 
 #include <iostream>
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
-
-const int kWidth = 512;
-const int kHeight = 512;
 
 //================================//
 SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(nullptr, &glfwDestroyWindow)
@@ -18,7 +16,7 @@ SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    this->window.reset(glfwCreateWindow(kWidth, kHeight, "Skyegrid", nullptr, nullptr));
+    this->window.reset(glfwCreateWindow(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT, "Skyegrid", nullptr, nullptr));
 
      GLFWwindow* window = this->window.get();
 
@@ -29,7 +27,7 @@ SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(
         return;
     }
 
-    WindowFormat windowFormat = { this->window.get(), kWidth, kHeight };
+    WindowFormat windowFormat = { this->window.get(), INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT };
     this->wgpuBundle = std::make_unique<WgpuBundle>(windowFormat);
     this->renderEngine = std::make_unique<RenderEngine>(this->wgpuBundle.get());
 

@@ -23,6 +23,7 @@ struct RenderPipelineWrapper
     std::vector<wgpu::Buffer>   associatedUniforms;
     std::vector<wgpu::Texture>  associatedTextures;
     std::vector<wgpu::TextureView> associatedTextureViews;
+    std::vector<wgpu::Sampler>  associatedSamplers;
 
     std::vector<size_t>         bufferSizes;
     std::vector<size_t>         uniformSizes;
@@ -56,7 +57,9 @@ struct RenderPipelineWrapper
 //================================//
 void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
 void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
+void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
 
 void InitComputeVoxelPipelineResources(RenderPipelineWrapper& pipelineWrapper, size_t voxelCount, size_t voxelParamSize);
+
 
 #endif // PIPELINES_HPP

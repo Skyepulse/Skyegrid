@@ -8,7 +8,6 @@
 //================================//
 WgpuBundle::WgpuBundle(WindowFormat windowFormat) : window(windowFormat.window), currentWidth(windowFormat.width), currentHeight(windowFormat.height)
 {
-    this->ComputeLimits();
     this->InitializeInstance();
     this->surface = wgpu::glfw::CreateSurfaceForWindow(instance, window);
     this->InitializeGraphics();
@@ -30,6 +29,9 @@ void WgpuBundle::InitializeInstance()
 
     if (wgpuRequestAdapter(this->instance, this->adapter, &options) < 0)
         throw std::runtime_error("Failed to request WebGPU adapter.");
+
+    adapter.GetLimits(&this->limits);
+    this->ComputeLimits();
 
     // Device
     wgpu::DeviceDescriptor deviceDesc{};
@@ -68,6 +70,7 @@ void WgpuBundle::ConfigureSurface()
     config.format = swapchainFormat;
     config.width = currentWidth;
     config.height = currentHeight;
+    config.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
 
     surface.Configure(&config);
 }
@@ -75,26 +78,65 @@ void WgpuBundle::ConfigureSurface()
 //================================//
 void WgpuBundle::ComputeLimits()
 {
-    this->limits = {};
+    // Adapter limits MUST already be loaded via:
+    // adapter.GetLimits(&this->limits);
 
-    this->limits.maxStorageBuffersPerShaderStage = 0;
-    this->limits.maxStorageBufferBindingSize    = 0;
+    // ---------------------------------------
+    // DO NOT TOUCH BUFFER LIMITS (CRITICAL)
+    // ---------------------------------------
+    // Dawn uses large internal storage buffers.
+    // Reducing these causes the 2GB uploader crash.
 
-    this->limits.maxStorageTexturesPerShaderStage = 2;
+    // this->limits.maxBufferSize               <-- leave untouched
+    // this->limits.maxStorageBufferBindingSize <-- leave untouched
+    // this->limits.maxStorageBuffersPerShaderStage <-- leave untouched
 
-    size_t maxTextureDimension3D = static_cast<size_t>(MAXIMUM_VOXEL_RESOLUTION / 4);
-    size_t maxTextureDimension2D = static_cast<size_t>(std::max(MAXIMUM_WINDOW_WIDTH, MAXIMUM_WINDOW_HEIGHT));
-    this->limits.maxTextureDimension3D = static_cast<uint32_t>(maxTextureDimension3D);
-    this->limits.maxTextureDimension2D = static_cast<uint32_t>(maxTextureDimension2D);
 
-    this->limits.maxUniformBuffersPerShaderStage = 1;
-    this->limits.maxUniformBufferBindingSize = 256;
+    // ---------------------------------------
+    // STORAGE TEXTURES (you use exactly 2)
+    // ---------------------------------------
+    this->limits.maxStorageTexturesPerShaderStage =
+        std::max(this->limits.maxStorageTexturesPerShaderStage, 2u);
 
-    // for now (8, 8, 1) workgroup size with 64 invocations
-    this->limits.maxComputeWorkgroupSizeX = 8;
-    this->limits.maxComputeWorkgroupSizeY = 8;
-    this->limits.maxComputeWorkgroupSizeZ = 1;
-    this->limits.maxComputeInvocationsPerWorkgroup = 64;
 
-    this->limits.maxComputeWorkgroupsPerDimension = 65535;
+    // ---------------------------------------
+    // TEXTURE DIMENSIONS
+    // ---------------------------------------
+    // These must be >= what you create
+
+    this->limits.maxTextureDimension2D =
+        std::max(this->limits.maxTextureDimension2D,
+                 static_cast<uint32_t>(
+                     std::max(MAXIMUM_WINDOW_WIDTH, MAXIMUM_WINDOW_HEIGHT)));
+
+    this->limits.maxTextureDimension3D =
+        std::max(this->limits.maxTextureDimension3D,
+                 static_cast<uint32_t>(MAXIMUM_VOXEL_RESOLUTION / 4));
+
+
+    // ---------------------------------------
+    // UNIFORMS (small, aligned)
+    // ---------------------------------------
+    this->limits.maxUniformBuffersPerShaderStage =
+        std::max(this->limits.maxUniformBuffersPerShaderStage, 1u);
+
+    this->limits.maxUniformBufferBindingSize =
+        std::max(static_cast<uint32_t>(this->limits.maxUniformBufferBindingSize), 256u);
+
+
+    // ---------------------------------------
+    // COMPUTE LIMITS
+    // ---------------------------------------
+    this->limits.maxComputeWorkgroupSizeX =
+        std::max(this->limits.maxComputeWorkgroupSizeX, 8u);
+    this->limits.maxComputeWorkgroupSizeY =
+        std::max(this->limits.maxComputeWorkgroupSizeY, 8u);
+    this->limits.maxComputeWorkgroupSizeZ =
+        std::max(this->limits.maxComputeWorkgroupSizeZ, 1u);
+
+    this->limits.maxComputeInvocationsPerWorkgroup =
+        std::max(this->limits.maxComputeInvocationsPerWorkgroup, 64u);
+
+    // Dispatch grid (leave adapter default — you depend on it)
+    // maxComputeWorkgroupsPerDimension unchanged
 }

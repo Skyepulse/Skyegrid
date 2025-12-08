@@ -9,6 +9,15 @@
 struct RenderInfo
 {
     int width;
+    int height;
+    double time;
+};
+
+//================================//
+struct VoxelParameters
+{
+    uint32_t voxelDimensions[3];
+    float    time;
 };
 
 //================================//
@@ -19,7 +28,8 @@ public:
     {
         this->wgpuBundle = bundle;
         CreateRenderPipelineDebug(*this->wgpuBundle, this->debugPipeline);
-        CreateComputeVoxelPipeline(*this->wgpuBundle, this->debugPipeline);
+        CreateComputeVoxelPipeline(*this->wgpuBundle, this->computeVoxelPipeline);
+        CreateBlitVoxelPipeline(*this->wgpuBundle, this->blitVoxelPipeline);
     };
     ~RenderEngine() = default;
 
@@ -27,7 +37,11 @@ public:
 
 private:
     RenderPipelineWrapper debugPipeline;
+    RenderPipelineWrapper computeVoxelPipeline;
+    RenderPipelineWrapper blitVoxelPipeline;
     WgpuBundle* wgpuBundle;
+
+    bool resizePending = true;
 };
 
 #endif // RENDER_ENGINE_HPP

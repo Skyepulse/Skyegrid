@@ -28,6 +28,8 @@ SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(
     }
 
     WindowFormat windowFormat = { this->window.get(), INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT };
+    this->renderInfo.width = INITIAL_WINDOW_WIDTH;
+    this->renderInfo.height = INITIAL_WINDOW_HEIGHT;
     this->wgpuBundle = std::make_unique<WgpuBundle>(windowFormat);
     this->renderEngine = std::make_unique<RenderEngine>(this->wgpuBundle.get());
 
@@ -52,7 +54,11 @@ void SkyegridManager::RunMainLoop()
         [](void* arg)
         {
             SkyegridManager* manager = static_cast<SkyegridManager*>(arg);
-            manager->renderEngine->Render(static_cast<void*>(manager->wgpuBundle.get()));
+
+            // get time
+            double currentTime = emscripten_get_now() / 1000.0;
+            manager->renderInfo.time = currentTime;
+            manager->renderEngine->Render(static_cast<void*>(&manager->renderInfo));
         },
         this,
         0,
@@ -62,7 +68,9 @@ void SkyegridManager::RunMainLoop()
     while (!glfwWindowShouldClose(this->window.get()))
     {
         glfwPollEvents();
-        this->renderEngine->Render(static_cast<void*>(this->wgpuBundle.get()));
+        double currentTime = static_cast<double>(glfwGetTime());
+        this->renderInfo.time = currentTime;
+        this->renderEngine->Render(static_cast<void*>(&this->renderInfo));
         this->wgpuBundle->GetSurface().Present();
         this->wgpuBundle->GetInstance().ProcessEvents();
     }

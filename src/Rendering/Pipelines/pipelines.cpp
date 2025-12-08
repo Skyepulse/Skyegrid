@@ -57,7 +57,7 @@ void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pi
 void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
 {
     pipelineWrapper.isCompute = true;
-    InitComputeVoxelPipelineResources(pipelineWrapper, MAXIMUM_VOXEL_RESOLUTION, UNIFORM_BUFFER_ALIGNMENT);
+    InitComputeVoxelPipelineResources(pipelineWrapper, MAXIMUM_VOXEL_RESOLUTION, COMPUTE_VOXEL_UNIFORM_SIZE);
 
     // SHADER 
     std::string shaderCode;
@@ -203,4 +203,89 @@ void InitComputeVoxelPipelineResources(RenderPipelineWrapper& pipelineWrapper, s
 
     // Number of other buffers: 0
     pipelineWrapper.bufferSizes.resize(0);
+}
+
+//================================//
+void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
+{
+    // Code in ../../../src/Shaders/blit.wgsl
+    std::string shaderCode;
+    if (getShaderCodeFromFile("Shaders/blit.wgsl", shaderCode) < 0)
+    {
+        throw std::runtime_error(
+            "[PIPELINES] Failed to load blit shader code from path: " +
+            (getExecutableDirectory() / "Shaders/blit.wgsl").string()
+        );
+    }
+
+    wgpu::ShaderSourceWGSL wgsl{};
+    wgsl.code = shaderCode.c_str();
+
+    wgpu::ShaderModuleDescriptor shaderModuleDesc{};
+    shaderModuleDesc.nextInChain = &wgsl;
+
+    pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
+    if (!pipelineWrapper.shaderModule)
+    {
+        throw std::runtime_error("[PIPELINES] Failed to create blit shader module.");
+    }
+
+    // Bind Group Layout
+    wgpu::BindGroupLayoutEntry textureBindingEntries[2]{};
+
+        // blit texture
+    textureBindingEntries[0].binding = 0;
+    textureBindingEntries[0].visibility = wgpu::ShaderStage::Fragment;
+    textureBindingEntries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    textureBindingEntries[0].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+    textureBindingEntries[0].texture.multisampled = false;
+
+        // blit sampler
+    textureBindingEntries[1].binding = 1;
+    textureBindingEntries[1].visibility = wgpu::ShaderStage::Fragment;
+    textureBindingEntries[1].sampler.type = wgpu::SamplerBindingType::Filtering;
+
+    wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
+    bindGroupLayoutDesc.entryCount = 2;
+    bindGroupLayoutDesc.entries = textureBindingEntries;
+    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+
+    // Pipeline Layout
+    wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
+    pipelineLayoutDesc.bindGroupLayoutCount = 1;
+    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
+
+    // Pipeline
+    wgpu::RenderPipelineDescriptor rpDesc{};
+    rpDesc.layout = pipelineWrapper.pipelineLayout;
+
+    rpDesc.vertex.module = pipelineWrapper.shaderModule;
+    rpDesc.vertex.entryPoint = "v";
+
+    wgpu::FragmentState fragmentState{};
+    fragmentState.module = pipelineWrapper.shaderModule;
+    fragmentState.entryPoint = "f";
+
+    wgpu::ColorTargetState colorTargetState{};
+    colorTargetState.format = wgpuBundle.GetSwapchainFormat();
+    fragmentState.targetCount = 1;
+    fragmentState.targets = &colorTargetState;
+
+    rpDesc.fragment = &fragmentState;
+    rpDesc.vertex.bufferCount = 0;
+    rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    pipelineWrapper.pipeline = wgpuBundle.GetDevice().CreateRenderPipeline(&rpDesc);
+
+    // Sampler
+    wgpu::SamplerDescriptor samplerDesc{};
+    samplerDesc.minFilter = wgpu::FilterMode::Nearest;
+    samplerDesc.magFilter = wgpu::FilterMode::Nearest;
+    samplerDesc.addressModeU = wgpu::AddressMode::ClampToEdge;
+    samplerDesc.addressModeV = wgpu::AddressMode::ClampToEdge;
+    pipelineWrapper.associatedSamplers.resize(1);
+    pipelineWrapper.associatedSamplers[0] = wgpuBundle.GetDevice().CreateSampler(&samplerDesc);
+
+    pipelineWrapper.init = 1;
+    pipelineWrapper.AssertConsistent();
 }

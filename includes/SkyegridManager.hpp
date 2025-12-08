@@ -22,6 +22,8 @@ private:
 
     bool correctlyInitialized = false;
     bool debugMode = false;
+
+    RenderInfo renderInfo;
 };
 
 #endif

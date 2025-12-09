@@ -6,6 +6,9 @@
 #include <emscripten/emscripten.h>
 #endif
 
+const float rotationSpeed = 0.05f;
+const float movementSpeed = 0.1f;
+
 //================================//
 SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(nullptr, &glfwDestroyWindow)
 {
@@ -67,12 +70,58 @@ void SkyegridManager::RunMainLoop()
 #else
     while (!glfwWindowShouldClose(this->window.get()))
     {
-        glfwPollEvents();
         double currentTime = static_cast<double>(glfwGetTime());
+        this->deltaTime = static_cast<float>(currentTime - this->lastFrameTime);
+        this->lastFrameTime = static_cast<float>(currentTime);
+
+        this->ProcessEvents(this->deltaTime);
         this->renderInfo.time = currentTime;
         this->renderEngine->Render(static_cast<void*>(&this->renderInfo));
         this->wgpuBundle->GetSurface().Present();
         this->wgpuBundle->GetInstance().ProcessEvents();
+
+        this->frameRateAccumulator.push_back(1.0f / this->deltaTime);
+        if (this->frameRateAccumulator.size() >= 100)
+        {
+            float sum = 0.0f;
+            for (float fr : this->frameRateAccumulator)
+                sum += fr;
+            this->frameRate = sum / static_cast<float>(this->frameRateAccumulator.size());
+            this->frameRateAccumulator.clear();
+
+            std::cout << "[SkyegridManager] Average Frame Rate: " << this->frameRate << " FPS" << std::endl;
+        }
     }
 #endif
+}
+
+//================================//
+void SkyegridManager::ProcessEvents(float deltaTime)
+{
+    glfwPollEvents();
+
+    // Z, Q, S, D rotates camera yaw/pitch
+    Camera* camera = this->renderEngine->GetCamera();
+
+    Eigen::Vector3f rotationDelta(0.0f, 0.0f, 0.0f);
+    if (glfwGetKey(this->window.get(), GLFW_KEY_Q) == GLFW_PRESS)
+        rotationDelta.y() -= rotationSpeed * deltaTime * 60.0f;
+    if (glfwGetKey(this->window.get(), GLFW_KEY_E) == GLFW_PRESS)
+        rotationDelta.y() += rotationSpeed * deltaTime * 60.0f;
+
+    Eigen::Vector3f movementDelta(0.0f, 0.0f, 0.0f);
+    if (glfwGetKey(this->window.get(), GLFW_KEY_W) == GLFW_PRESS)
+        movementDelta.z() += movementSpeed * deltaTime * 60.0f;
+    if (glfwGetKey(this->window.get(), GLFW_KEY_S) == GLFW_PRESS)
+        movementDelta.z() -= movementSpeed * deltaTime * 60.0f;
+    if (glfwGetKey(this->window.get(), GLFW_KEY_A) == GLFW_PRESS)
+        movementDelta.x() -= movementSpeed * deltaTime * 60.0f;
+    if (glfwGetKey(this->window.get(), GLFW_KEY_D) == GLFW_PRESS)
+        movementDelta.x() += movementSpeed * deltaTime * 60.0f;
+    
+    camera->Rotate(rotationDelta);
+    camera->Move(movementDelta);
+
+    if (glfwGetKey(this->window.get(), GLFW_KEY_R) == GLFW_PRESS)
+        std::cout << "[SkyegridManager] Camera Position: " << camera->GetPosition().transpose() << std::endl;
 }

@@ -12,8 +12,9 @@ public:
     ~SkyegridManager();
 
     void RunMainLoop();
-
+    
 private:
+    void ProcessEvents(float deltaTime);
 
     std::unique_ptr<RenderEngine> renderEngine;
     std::unique_ptr<WgpuBundle> wgpuBundle;
@@ -24,6 +25,11 @@ private:
     bool debugMode = false;
 
     RenderInfo renderInfo;
+
+    float lastFrameTime = 0.0f;
+    float deltaTime = 0.0f;
+    float frameRate = 0.0f;
+    std::vector<float> frameRateAccumulator;
 };
 
 #endif

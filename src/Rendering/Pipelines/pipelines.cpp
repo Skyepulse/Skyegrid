@@ -187,6 +187,7 @@ void InitComputeVoxelPipelineResources(RenderPipelineWrapper& pipelineWrapper, s
 {
     // WE SHOULD ENFORCE voxelResolution % 8 == 0
     assert(voxelResolution % 8 == 0);
+    assert(voxelResolution % 64 == 0);
 
     // We initialize here the buffers sizes, in order to have the limits when querying
     // the device capabilities for buffer sizes.

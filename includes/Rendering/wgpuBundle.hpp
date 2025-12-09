@@ -26,6 +26,18 @@ public:
     wgpu::Surface& GetSurface() { return this->surface; }
     wgpu::TextureFormat& GetSwapchainFormat() { return this->swapchainFormat; }
 
+    WindowFormat GetWindowFormat() const
+    {
+        return WindowFormat{ this->window, this->currentWidth, this->currentHeight };
+    }
+
+    void Resize(int newWidth, int newHeight)
+    {
+        this->currentWidth = newWidth;
+        this->currentHeight = newHeight;
+        this->ConfigureSurface();
+    }
+    
 private:
     void ComputeLimits();
     

@@ -20,6 +20,8 @@ set(SRC_FILES
   src/Rendering/RenderEngine.cpp
   includes/Rendering/RenderEngine.hpp
   includes/constants.hpp
+  includes/Rendering/Camera/Camera.hpp
+  src/Rendering/Camera/Camera.cpp
 )
 
 add_executable(Skyegrid ${SRC_FILES})

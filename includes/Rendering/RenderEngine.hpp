@@ -90,6 +90,8 @@ public:
         {
             voxelDataCache[x][y][z] = 1;
         }
+
+        this->PackVoxelDataToGPU();
     }
     ~RenderEngine() = default;
 
@@ -100,6 +102,7 @@ public:
 private:
 
     void RebuildVoxelPipelineResources(const RenderInfo& renderInfo);
+    void PackVoxelDataToGPU();
 
     RenderPipelineWrapper debugPipeline;
     RenderPipelineWrapper computeVoxelPipeline;

@@ -101,6 +101,37 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
 }
 
 //================================//
+void RenderEngine::PackVoxelDataToGPU()
+{
+    std::vector<uint32_t> packed;
+    PackVoxelsRGBA32UI(this->voxelDataCache, MAXIMUM_VOXEL_RESOLUTION, packed);
+
+    wgpu::TexelCopyTextureInfo textureCopyDesc{};
+    textureCopyDesc.texture = this->computeVoxelPipeline.associatedTextures[1];
+    textureCopyDesc.mipLevel = 0;
+    textureCopyDesc.origin = { 0, 0, 0 };
+    textureCopyDesc.aspect = wgpu::TextureAspect::All;
+
+    wgpu::TexelCopyBufferLayout bufferLayout{};
+    bufferLayout.offset = 0;
+    bufferLayout.bytesPerRow = MAXIMUM_VOXEL_RESOLUTION / 4 * 4 * sizeof(uint32_t);
+    bufferLayout.rowsPerImage = MAXIMUM_VOXEL_RESOLUTION / 4;
+
+    wgpu::Extent3D copySize{};
+    copySize.width = MAXIMUM_VOXEL_RESOLUTION / 4;
+    copySize.height = MAXIMUM_VOXEL_RESOLUTION / 4;
+    copySize.depthOrArrayLayers = MAXIMUM_VOXEL_RESOLUTION / 8;
+
+    this->wgpuBundle->GetDevice().GetQueue().WriteTexture(
+        &textureCopyDesc,
+        packed.data(),
+        packed.size() * sizeof(uint32_t),
+        &bufferLayout,
+        &copySize
+    );
+}
+
+//================================//
 void RenderEngine::Render(void* userData)
 {
     auto renderInfo = *static_cast<RenderInfo*>(userData);
@@ -154,34 +185,6 @@ void RenderEngine::Render(void* userData)
             0,
             &voxelParams,
             sizeof(VoxelParameters)
-        );
-
-        // Write Voxel Data into this->computeVoxelPipeline.associatedTextures[0] and associatedTextureViews[0]
-        std::vector<uint32_t> packed;
-        PackVoxelsRGBA32UI(this->voxelDataCache, MAXIMUM_VOXEL_RESOLUTION, packed);
-
-        wgpu::TexelCopyTextureInfo textureCopyDesc{};
-        textureCopyDesc.texture = this->computeVoxelPipeline.associatedTextures[1];
-        textureCopyDesc.mipLevel = 0;
-        textureCopyDesc.origin = { 0, 0, 0 };
-        textureCopyDesc.aspect = wgpu::TextureAspect::All;
-
-        wgpu::TexelCopyBufferLayout bufferLayout{};
-        bufferLayout.offset = 0;
-        bufferLayout.bytesPerRow = MAXIMUM_VOXEL_RESOLUTION / 4 * 4 * sizeof(uint32_t);
-        bufferLayout.rowsPerImage = MAXIMUM_VOXEL_RESOLUTION / 4;
-
-        wgpu::Extent3D copySize{};
-        copySize.width = MAXIMUM_VOXEL_RESOLUTION / 4;
-        copySize.height = MAXIMUM_VOXEL_RESOLUTION / 4;
-        copySize.depthOrArrayLayers = MAXIMUM_VOXEL_RESOLUTION / 8;
-
-        queue.WriteTexture(
-            &textureCopyDesc,
-            packed.data(),
-            packed.size() * sizeof(uint32_t),
-            &bufferLayout,
-            &copySize
         );
 
         wgpu::ComputePassDescriptor computePassDesc{};

@@ -58,10 +58,64 @@ void SkyegridManager::RunMainLoop()
         {
             SkyegridManager* manager = static_cast<SkyegridManager*>(arg);
 
-            // get time
             double currentTime = emscripten_get_now() / 1000.0;
+
+            if (manager->lastFrameTime == 0.0f)
+                manager->lastFrameTime =
+                    static_cast<float>(currentTime);
+
+            manager->deltaTime =
+                static_cast<float>(
+                    currentTime - manager->lastFrameTime
+                );
+
+            manager->lastFrameTime =
+                static_cast<float>(currentTime);
+
+            // Clamp delta (tab switching / throttling)
+            manager->deltaTime =
+                std::min(manager->deltaTime, 0.1f);
+
+            // --- Input ---
+            manager->ProcessEvents(manager->deltaTime);
+
+            // --- Render ---
             manager->renderInfo.time = currentTime;
-            manager->renderEngine->Render(static_cast<void*>(&manager->renderInfo));
+            manager->renderEngine->Render(
+                static_cast<void*>(&manager->renderInfo)
+            );
+
+            manager->wgpuBundle->GetSurface().Present();
+            manager->wgpuBundle->GetInstance().ProcessEvents();
+
+            // --- FPS accumulation ---
+            if (manager->deltaTime > 0.0f)
+            {
+                manager->frameRateAccumulator.push_back(
+                    1.0f / manager->deltaTime
+                );
+
+                if (manager->frameRateAccumulator.size() >= 100)
+                {
+                    float sum = 0.0f;
+                    for (float fr : manager->frameRateAccumulator)
+                        sum += fr;
+
+                    manager->frameRate =
+                        sum /
+                        static_cast<float>(
+                            manager->frameRateAccumulator.size()
+                        );
+
+                    manager->frameRateAccumulator.clear();
+
+                    std::cout
+                        << "[SkyegridManager] Average Frame Rate: "
+                        << manager->frameRate
+                        << " FPS"
+                        << std::endl;
+                }
+            }
         },
         this,
         0,

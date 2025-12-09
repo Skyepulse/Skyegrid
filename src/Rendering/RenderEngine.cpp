@@ -40,36 +40,86 @@ static void PackVoxelsRGBA32UI(
 }
 
 //================================//
+void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
+{
+    // We reconstruct here the objects
+    // of the voxel compute pipeline that depend on window size directly
+    // Recreate output texture for voxel pipeline
+    this->computeVoxelPipeline.textureSizes[0] = renderInfo.width * renderInfo.height * 4; // Output voxel texture, RGBA8
+    this->computeVoxelPipeline.associatedTextures[0] = nullptr;
+    this->computeVoxelPipeline.associatedTextureViews[0] = nullptr;
+
+    wgpu::TextureDescriptor textureDescriptor{};
+    wgpu::TextureViewDescriptor viewDescriptor{};
+
+    textureDescriptor.dimension = wgpu::TextureDimension::e2D;
+    textureDescriptor.size = { renderInfo.width, renderInfo.height, 1 };
+    textureDescriptor.sampleCount = 1;
+    textureDescriptor.mipLevelCount = 1;
+    textureDescriptor.format = wgpu::TextureFormat::RGBA8Unorm;
+    textureDescriptor.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::TextureBinding;
+    this->computeVoxelPipeline.associatedTextures[0] = this->wgpuBundle->GetDevice().CreateTexture(&textureDescriptor);
+
+    viewDescriptor.dimension = wgpu::TextureViewDimension::e2D;
+    viewDescriptor.format = textureDescriptor.format;
+    this->computeVoxelPipeline.associatedTextureViews[0] = this->computeVoxelPipeline.associatedTextures[0].CreateView(&viewDescriptor);
+
+    // Compute pipeline bind group
+    // Bind Group
+    this->computeVoxelPipeline.bindGroup = nullptr;
+    std::vector<wgpu::BindGroupEntry> bindGroupEntries(3);
+
+    bindGroupEntries[0].binding = 0;
+    bindGroupEntries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
+
+    bindGroupEntries[1].binding = 1;
+    bindGroupEntries[1].textureView = this->computeVoxelPipeline.associatedTextureViews[1];
+
+    bindGroupEntries[2].binding = 2;
+    bindGroupEntries[2].buffer = this->computeVoxelPipeline.associatedUniforms[0];
+    bindGroupEntries[2].offset = 0;
+    bindGroupEntries[2].size = this->computeVoxelPipeline.uniformSizes[0];
+
+    wgpu::BindGroupDescriptor bindGroupDesc{};
+    bindGroupDesc.layout = this->computeVoxelPipeline.bindGroupLayout;
+    bindGroupDesc.entryCount = static_cast<uint32_t>(bindGroupEntries.size());
+    bindGroupDesc.entries = bindGroupEntries.data();
+    this->computeVoxelPipeline.bindGroup = this->wgpuBundle->GetDevice().CreateBindGroup(&bindGroupDesc);
+
+    // Blit pipeline bind group
+    this->blitVoxelPipeline.bindGroup = nullptr; 
+    wgpu::BindGroupEntry blitEntries[2]{};
+    blitEntries[0].binding = 0;
+    blitEntries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
+    blitEntries[1].binding = 1;
+    blitEntries[1].sampler = this->blitVoxelPipeline.associatedSamplers[0];
+    wgpu::BindGroupDescriptor blitBindGroupDesc{};
+    blitBindGroupDesc.layout = this->blitVoxelPipeline.bindGroupLayout;
+    blitBindGroupDesc.entryCount = 2;
+    blitBindGroupDesc.entries = blitEntries;
+    this->blitVoxelPipeline.bindGroup = this->wgpuBundle->GetDevice().CreateBindGroup(&blitBindGroupDesc);
+}
+
+//================================//
 void RenderEngine::Render(void* userData)
 {
+    auto renderInfo = *static_cast<RenderInfo*>(userData);
+    if (renderInfo.resizeNeeded)
+        this->resizePending = true;
+
     if (this->resizePending) // resizePending is true on start, so on first frame call
     {
-        // We will have to recreate the output texture and bind group here
         this->resizePending = false;
-
-        // For now we wont resize anything, we skip the recreation. We suppose the 
-        // texture has been correctly created at pipeline creation for now.
-
-        this->blitVoxelPipeline.bindGroup = nullptr; // Reset bind group to recreate it
-        wgpu::BindGroupEntry blitEntries[2]{};
-        blitEntries[0].binding = 0;
-        blitEntries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
-        blitEntries[1].binding = 1;
-        blitEntries[1].sampler = this->blitVoxelPipeline.associatedSamplers[0];
-        wgpu::BindGroupDescriptor blitBindGroupDesc{};
-        blitBindGroupDesc.layout = this->blitVoxelPipeline.bindGroupLayout;
-        blitBindGroupDesc.entryCount = 2;
-        blitBindGroupDesc.entries = blitEntries;
-        this->blitVoxelPipeline.bindGroup = this->wgpuBundle->GetDevice().CreateBindGroup(&blitBindGroupDesc);
+        
+        // We will have to recreate the output texture and bind group here
+        this->RebuildVoxelPipelineResources(renderInfo);
 
         // Camera resize
         WindowFormat windowFormat = this->wgpuBundle->GetWindowFormat();
         this->camera->SetExtent(Eigen::Vector2f(static_cast<float>(windowFormat.width), static_cast<float>(windowFormat.height)));
     }
 
-    // Swapchain Texture View
-    auto renderInfo = *static_cast<RenderInfo*>(userData);
-    
+    // Swapchain Texture View    
     wgpu::SurfaceTexture currentTexture;
     wgpu::Surface surface = this->wgpuBundle->GetSurface();
     surface.GetCurrentTexture(&currentTexture);
@@ -90,6 +140,7 @@ void RenderEngine::Render(void* userData)
     wgpu::CommandEncoder encoder = this->wgpuBundle->GetDevice().CreateCommandEncoder(&cmdDesc);
 
     // Compute pass
+    this->computeVoxelPipeline.AssertConsistent();
     {
         // Write Uniform
         VoxelParameters voxelParams{};
@@ -149,6 +200,7 @@ void RenderEngine::Render(void* userData)
     }
 
     // Blit pass
+    this->blitVoxelPipeline.AssertConsistent();
     {
         wgpu::RenderPassColorAttachment colorAttachment{};
         colorAttachment.view = swapchainView;

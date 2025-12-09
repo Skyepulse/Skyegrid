@@ -2,6 +2,7 @@
 #include "../../includes/Rendering/wgpuHelpers.hpp"
 #include "../../includes/constants.hpp"
 
+#include <GLFW/glfw3.h>
 #include <vector>
 #include <iostream>
 
@@ -9,7 +10,19 @@
 WgpuBundle::WgpuBundle(WindowFormat windowFormat) : window(windowFormat.window), currentWidth(windowFormat.width), currentHeight(windowFormat.height)
 {
     this->InitializeInstance();
-    this->surface = wgpu::glfw::CreateSurfaceForWindow(instance, window);
+    this->surface = wgpu::glfw::CreateSurfaceForWindow(this->instance, window);
+
+    // Callback on window resize
+    glfwSetWindowUserPointer(window, this);
+    glfwSetFramebufferSizeCallback(
+        window,
+        [](GLFWwindow* wnd, int width, int height)
+        {
+            WgpuBundle* bundle = static_cast<WgpuBundle*>(glfwGetWindowUserPointer(wnd));
+            bundle->Resize(width, height);
+        }
+    );
+
     this->InitializeGraphics();
 }
 
@@ -139,4 +152,14 @@ void WgpuBundle::ComputeLimits()
 
     // Dispatch grid (leave adapter default — you depend on it)
     // maxComputeWorkgroupsPerDimension unchanged
+}
+
+//================================//
+void WgpuBundle::Resize(int newWidth, int newHeight)
+{
+    this->currentWidth = newWidth;
+    this->currentHeight = newHeight;
+    this->ConfigureSurface();
+
+    this->resizeFlag = true;
 }

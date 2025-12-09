@@ -85,18 +85,6 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     wgpu::TextureDescriptor textureDescriptor{};
     wgpu::TextureViewDescriptor viewDescriptor{};
 
-    textureDescriptor.dimension = wgpu::TextureDimension::e2D;
-    textureDescriptor.size = { MAXIMUM_WINDOW_WIDTH, MAXIMUM_WINDOW_HEIGHT, 1 };
-    textureDescriptor.sampleCount = 1;
-    textureDescriptor.mipLevelCount = 1;
-    textureDescriptor.format = wgpu::TextureFormat::RGBA8Unorm;
-    textureDescriptor.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::TextureBinding;
-    pipelineWrapper.associatedTextures[0] = wgpuBundle.GetDevice().CreateTexture(&textureDescriptor);
-
-    viewDescriptor.dimension = wgpu::TextureViewDimension::e2D;
-    viewDescriptor.format = textureDescriptor.format;
-    pipelineWrapper.associatedTextureViews[0] = pipelineWrapper.associatedTextures[0].CreateView(&viewDescriptor);
-
     textureDescriptor.dimension = wgpu::TextureDimension::e3D;
     textureDescriptor.size = { MAXIMUM_VOXEL_RESOLUTION / 4, MAXIMUM_VOXEL_RESOLUTION / 4, MAXIMUM_VOXEL_RESOLUTION / 8 };
     textureDescriptor.sampleCount = 1;
@@ -145,26 +133,6 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     bindGroupLayoutDesc.entries = textureBindingEntries;
     pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
-    // Bind Group
-    std::vector<wgpu::BindGroupEntry> bindGroupEntries(3);
-
-    bindGroupEntries[0].binding = 0;
-    bindGroupEntries[0].textureView = pipelineWrapper.associatedTextureViews[0];
-
-    bindGroupEntries[1].binding = 1;
-    bindGroupEntries[1].textureView = pipelineWrapper.associatedTextureViews[1];
-
-    bindGroupEntries[2].binding = 2;
-    bindGroupEntries[2].buffer = pipelineWrapper.associatedUniforms[0];
-    bindGroupEntries[2].offset = 0;
-    bindGroupEntries[2].size = pipelineWrapper.uniformSizes[0];
-
-    wgpu::BindGroupDescriptor bindGroupDesc{};
-    bindGroupDesc.layout = pipelineWrapper.bindGroupLayout;
-    bindGroupDesc.entryCount = static_cast<uint32_t>(bindGroupEntries.size());
-    bindGroupDesc.entries = bindGroupEntries.data();
-    pipelineWrapper.bindGroup = wgpuBundle.GetDevice().CreateBindGroup(&bindGroupDesc);
-
     // Pipeline Layout
     wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
     pipelineLayoutDesc.bindGroupLayoutCount = 1;
@@ -194,7 +162,6 @@ void InitComputeVoxelPipelineResources(RenderPipelineWrapper& pipelineWrapper, s
 
     // Number of textures: 2 (the output voxel texture, the texel voxel storage texture)
     pipelineWrapper.textureSizes.resize(2);
-    pipelineWrapper.textureSizes[0] = MAXIMUM_WINDOW_HEIGHT * MAXIMUM_WINDOW_WIDTH * 4; // Output voxel texture, RGBA8
     size_t texelCount = (voxelResolution * voxelResolution * voxelResolution) / (4 * 4 * 8);
     pipelineWrapper.textureSizes[1] = texelCount * 16; // Texel is size of uvec4 = 16 bytes
     

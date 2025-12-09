@@ -11,9 +11,10 @@
 //================================//
 struct RenderInfo
 {
-    int width;
-    int height;
+    uint32_t width;
+    uint32_t height;
     double time;
+    bool resizeNeeded;
 };
 
 //================================//
@@ -60,6 +61,8 @@ public:
                 voxelDataCache[x][y].resize(MAXIMUM_VOXEL_RESOLUTION, 0);
             }
         }
+
+        // Cube edges
         for (int x = 0; x < MAXIMUM_VOXEL_RESOLUTION; ++x)
         for (int y = 0; y < MAXIMUM_VOXEL_RESOLUTION; ++y)
         for (int z = 0; z < MAXIMUM_VOXEL_RESOLUTION; ++z)
@@ -79,6 +82,14 @@ public:
 
             voxelDataCache[x][y][z] = edge ? 1 : 0;
         }
+
+        // Cube in the exact middle
+        for (int x = MAXIMUM_VOXEL_RESOLUTION / 4; x < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++x)
+        for (int y = MAXIMUM_VOXEL_RESOLUTION / 4; y < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++y)
+        for (int z = MAXIMUM_VOXEL_RESOLUTION / 4; z < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++z)
+        {
+            voxelDataCache[x][y][z] = 1;
+        }
     }
     ~RenderEngine() = default;
 
@@ -87,6 +98,9 @@ public:
     Camera* GetCamera() { return this->camera.get(); }
 
 private:
+
+    void RebuildVoxelPipelineResources(const RenderInfo& renderInfo);
+
     RenderPipelineWrapper debugPipeline;
     RenderPipelineWrapper computeVoxelPipeline;
     RenderPipelineWrapper blitVoxelPipeline;

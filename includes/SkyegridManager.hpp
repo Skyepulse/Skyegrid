@@ -15,6 +15,8 @@ public:
     
 private:
     void ProcessEvents(float deltaTime);
+    void UpdateCurrentTime();
+    void AccumulateFrameRate();
 
     std::unique_ptr<RenderEngine> renderEngine;
     std::unique_ptr<WgpuBundle> wgpuBundle;

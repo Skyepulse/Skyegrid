@@ -30,9 +30,9 @@ SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(
         return;
     }
 
-    WindowFormat windowFormat = { this->window.get(), INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT };
-    this->renderInfo.width = INITIAL_WINDOW_WIDTH;
-    this->renderInfo.height = INITIAL_WINDOW_HEIGHT;
+    WindowFormat windowFormat = { this->window.get(), INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT, false };
+    this->renderInfo.width = static_cast<uint32_t>(INITIAL_WINDOW_WIDTH);
+    this->renderInfo.height = static_cast<uint32_t>(INITIAL_WINDOW_HEIGHT);
     this->wgpuBundle = std::make_unique<WgpuBundle>(windowFormat);
     this->renderEngine = std::make_unique<RenderEngine>(this->wgpuBundle.get());
 
@@ -58,29 +58,10 @@ void SkyegridManager::RunMainLoop()
         {
             SkyegridManager* manager = static_cast<SkyegridManager*>(arg);
 
-            double currentTime = emscripten_get_now() / 1000.0;
+            manager->UpdateCurrentTime();
 
-            if (manager->lastFrameTime == 0.0f)
-                manager->lastFrameTime =
-                    static_cast<float>(currentTime);
-
-            manager->deltaTime =
-                static_cast<float>(
-                    currentTime - manager->lastFrameTime
-                );
-
-            manager->lastFrameTime =
-                static_cast<float>(currentTime);
-
-            // Clamp delta (tab switching / throttling)
-            manager->deltaTime =
-                std::min(manager->deltaTime, 0.1f);
-
-            // --- Input ---
             manager->ProcessEvents(manager->deltaTime);
 
-            // --- Render ---
-            manager->renderInfo.time = currentTime;
             manager->renderEngine->Render(
                 static_cast<void*>(&manager->renderInfo)
             );
@@ -89,33 +70,7 @@ void SkyegridManager::RunMainLoop()
             manager->wgpuBundle->GetInstance().ProcessEvents();
 
             // --- FPS accumulation ---
-            if (manager->deltaTime > 0.0f)
-            {
-                manager->frameRateAccumulator.push_back(
-                    1.0f / manager->deltaTime
-                );
-
-                if (manager->frameRateAccumulator.size() >= 100)
-                {
-                    float sum = 0.0f;
-                    for (float fr : manager->frameRateAccumulator)
-                        sum += fr;
-
-                    manager->frameRate =
-                        sum /
-                        static_cast<float>(
-                            manager->frameRateAccumulator.size()
-                        );
-
-                    manager->frameRateAccumulator.clear();
-
-                    std::cout
-                        << "[SkyegridManager] Average Frame Rate: "
-                        << manager->frameRate
-                        << " FPS"
-                        << std::endl;
-                }
-            }
+            manager->AccumulateFrameRate();
         },
         this,
         0,
@@ -124,27 +79,14 @@ void SkyegridManager::RunMainLoop()
 #else
     while (!glfwWindowShouldClose(this->window.get()))
     {
-        double currentTime = static_cast<double>(glfwGetTime());
-        this->deltaTime = static_cast<float>(currentTime - this->lastFrameTime);
-        this->lastFrameTime = static_cast<float>(currentTime);
+        this->UpdateCurrentTime();
 
         this->ProcessEvents(this->deltaTime);
-        this->renderInfo.time = currentTime;
         this->renderEngine->Render(static_cast<void*>(&this->renderInfo));
         this->wgpuBundle->GetSurface().Present();
         this->wgpuBundle->GetInstance().ProcessEvents();
 
-        this->frameRateAccumulator.push_back(1.0f / this->deltaTime);
-        if (this->frameRateAccumulator.size() >= 100)
-        {
-            float sum = 0.0f;
-            for (float fr : this->frameRateAccumulator)
-                sum += fr;
-            this->frameRate = sum / static_cast<float>(this->frameRateAccumulator.size());
-            this->frameRateAccumulator.clear();
-
-            std::cout << "[SkyegridManager] Average Frame Rate: " << this->frameRate << " FPS" << std::endl;
-        }
+        this->AccumulateFrameRate();
     }
 #endif
 }
@@ -178,4 +120,50 @@ void SkyegridManager::ProcessEvents(float deltaTime)
 
     if (glfwGetKey(this->window.get(), GLFW_KEY_R) == GLFW_PRESS)
         std::cout << "[SkyegridManager] Camera Position: " << camera->GetPosition().transpose() << std::endl;
+
+    WindowFormat currentFormat = this->wgpuBundle->GetWindowFormat();
+    this->renderInfo.width = static_cast<uint32_t>(currentFormat.width);
+    this->renderInfo.height = static_cast<uint32_t>(currentFormat.height);
+    this->renderInfo.resizeNeeded = currentFormat.resizeNeeded;
+}
+
+//================================//
+void SkyegridManager::UpdateCurrentTime()
+{
+#ifdef __EMSCRIPTEN__
+    double currentTime = emscripten_get_now() / 1000.0;
+#else
+    double currentTime = static_cast<double>(glfwGetTime());
+#endif
+
+    if (this->lastFrameTime == 0.0f)
+            this->lastFrameTime = static_cast<float>(currentTime);
+
+    this->deltaTime = static_cast<float>(currentTime - this->lastFrameTime);
+    this->lastFrameTime = static_cast<float>(currentTime);
+
+    this->renderInfo.time = currentTime;
+
+#ifdef __EMSCRIPTEN__
+    this->deltaTime = std::min(this->deltaTime, 0.1f);
+#endif
+}
+
+//================================//
+void SkyegridManager::AccumulateFrameRate()
+{
+    if (this->deltaTime <= 0.0f)
+        return;
+
+    this->frameRateAccumulator.push_back(1.0f / this->deltaTime);
+    if (this->frameRateAccumulator.size() >= 100)
+    {
+        float sum = 0.0f;
+        for (float fr : this->frameRateAccumulator)
+            sum += fr;
+        this->frameRate = sum / static_cast<float>(this->frameRateAccumulator.size());
+        this->frameRateAccumulator.clear();
+
+        std::cout << "[SkyegridManager] Average Frame Rate: " << this->frameRate << " FPS" << std::endl;
+    }
 }

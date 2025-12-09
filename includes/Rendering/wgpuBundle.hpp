@@ -11,6 +11,7 @@ struct WindowFormat
     GLFWwindow* window;
     int width;
     int height;
+    bool resizeNeeded;
 };
 
 //================================//
@@ -26,16 +27,13 @@ public:
     wgpu::Surface& GetSurface() { return this->surface; }
     wgpu::TextureFormat& GetSwapchainFormat() { return this->swapchainFormat; }
 
-    WindowFormat GetWindowFormat() const
+    WindowFormat GetWindowFormat()
     {
-        return WindowFormat{ this->window, this->currentWidth, this->currentHeight };
-    }
+        WindowFormat format{ nullptr, this->currentWidth, this->currentHeight, this->resizeFlag };
+        if (this->resizeFlag)
+            this->resizeFlag = false;
 
-    void Resize(int newWidth, int newHeight)
-    {
-        this->currentWidth = newWidth;
-        this->currentHeight = newHeight;
-        this->ConfigureSurface();
+        return format;
     }
     
 private:
@@ -45,6 +43,7 @@ private:
     void InitializeGraphics();
 
     void ConfigureSurface();
+    void Resize(int newWidth, int newHeight);
 
     // WebGPU objects
     wgpu::Instance instance;
@@ -59,6 +58,7 @@ private:
     GLFWwindow* window;
     int currentWidth;
     int currentHeight;
+    bool resizeFlag = false;
 
     wgpu::Limits limits;
 };

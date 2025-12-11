@@ -42,7 +42,10 @@ SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(
 //================================//
 SkyegridManager::~SkyegridManager()
 {
-    glfwDestroyWindow(this->window.get());
+    this->window.reset();
+    this->renderEngine.reset();
+    this->wgpuBundle.reset();
+    
     glfwTerminate();
 }
 
@@ -66,7 +69,6 @@ void SkyegridManager::RunMainLoop()
                 static_cast<void*>(&manager->renderInfo)
             );
 
-            manager->wgpuBundle->GetSurface().Present();
             manager->wgpuBundle->GetInstance().ProcessEvents();
 
             // --- FPS accumulation ---
@@ -83,6 +85,7 @@ void SkyegridManager::RunMainLoop()
 
         this->ProcessEvents(this->deltaTime);
         this->renderEngine->Render(static_cast<void*>(&this->renderInfo));
+        //this->renderEngine->RenderDebug(static_cast<void*>(&this->renderInfo));
         this->wgpuBundle->GetSurface().Present();
         this->wgpuBundle->GetInstance().ProcessEvents();
 
@@ -96,7 +99,6 @@ void SkyegridManager::ProcessEvents(float deltaTime)
 {
     glfwPollEvents();
 
-    // Z, Q, S, D rotates camera yaw/pitch
     Camera* camera = this->renderEngine->GetCamera();
 
     Eigen::Vector3f rotationDelta(0.0f, 0.0f, 0.0f);

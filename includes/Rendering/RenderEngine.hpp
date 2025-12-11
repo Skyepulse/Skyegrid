@@ -7,6 +7,7 @@
 #include <Eigen/Core>
 #include "Camera/Camera.hpp"
 #include "../constants.hpp"
+#include <iostream>
 
 //================================//
 struct RenderInfo
@@ -34,6 +35,7 @@ class RenderEngine
 public:
     RenderEngine(WgpuBundle* bundle)
     {
+        std::cout << "[RenderEngine] Initializing Render Engine...\n";
         // Create Debug Pipeline
         this->wgpuBundle = bundle;
         
@@ -52,6 +54,9 @@ public:
         CreateComputeVoxelPipeline(*this->wgpuBundle, this->computeVoxelPipeline);
         CreateBlitVoxelPipeline(*this->wgpuBundle, this->blitVoxelPipeline);
 
+        std::cout << "[RenderEngine] Render Engine initialized successfully.\n";
+
+        std::cout << "[RenderEngine] Preparing voxel data...\n";
         voxelDataCache.resize(MAXIMUM_VOXEL_RESOLUTION);
         for (int x = 0; x < MAXIMUM_VOXEL_RESOLUTION; x++)
         {
@@ -96,6 +101,7 @@ public:
     ~RenderEngine() = default;
 
     void Render(void* userData);
+    void RenderDebug(void* userData);
 
     Camera* GetCamera() { return this->camera.get(); }
 

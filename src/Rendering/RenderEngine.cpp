@@ -103,8 +103,12 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
 //================================//
 void RenderEngine::PackVoxelDataToGPU()
 {
+    std::cout << "Packing voxel data to GPU...\n";
+
     std::vector<uint32_t> packed;
     PackVoxelsRGBA32UI(this->voxelDataCache, MAXIMUM_VOXEL_RESOLUTION, packed);
+
+    std::cout << "Total size of packed voxel data in bytes: " << packed.size() * sizeof(uint32_t) << "\n";
 
     wgpu::TexelCopyTextureInfo textureCopyDesc{};
     textureCopyDesc.texture = this->computeVoxelPipeline.associatedTextures[1];
@@ -129,6 +133,8 @@ void RenderEngine::PackVoxelDataToGPU()
         &bufferLayout,
         &copySize
     );
+
+    std::cout << "Voxel data packed to GPU successfully.\n";
 }
 
 //================================//
@@ -227,6 +233,68 @@ void RenderEngine::Render(void* userData)
         pass.End();
     }
 
+    wgpu::CommandBuffer commandBuffer = encoder.Finish();
+    this->wgpuBundle->GetDevice().GetQueue().Submit(1, &commandBuffer);
+}
+
+//================================//
+void RenderEngine::RenderDebug(void* userData)
+{
+    auto renderInfo = *static_cast<RenderInfo*>(userData);
+    if (renderInfo.resizeNeeded)
+        this->resizePending = true;
+
+    if (this->resizePending) // resizePending is true on start, so on first frame call
+    {
+        this->resizePending = false;
+        
+        // Camera resize
+        WindowFormat windowFormat = this->wgpuBundle->GetWindowFormat();
+        this->camera->SetExtent(Eigen::Vector2f(static_cast<float>(windowFormat.width), static_cast<float>(windowFormat.height)));
+    }
+
+    // Swapchain Texture View    
+    wgpu::SurfaceTexture currentTexture;
+    wgpu::Surface surface = this->wgpuBundle->GetSurface();
+    surface.GetCurrentTexture(&currentTexture);
+
+    auto status = currentTexture.status;
+    if (status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal &&
+        status != wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal)
+    {
+        std::cout << "Surface lost/outdated, need reconfigure.\n";
+        return;
+    }
+
+    wgpu::TextureView swapchainView = currentTexture.texture.CreateView();
+
+    // Command Encoder
+    wgpu::Queue queue = this->wgpuBundle->GetDevice().GetQueue();
+    wgpu::CommandEncoderDescriptor cmdDesc{};
+    wgpu::CommandEncoder encoder = this->wgpuBundle->GetDevice().CreateCommandEncoder(&cmdDesc);
+
+    // Debug render pass
+    this->debugPipeline.AssertConsistent();
+    {
+        wgpu::RenderPassColorAttachment colorAttachment{};
+        colorAttachment.view = swapchainView;
+        colorAttachment.loadOp  = wgpu::LoadOp::Clear;
+        colorAttachment.clearValue = { 0.1f, 0.1f, 0.1f, 1.0f };
+        colorAttachment.storeOp = wgpu::StoreOp::Store;
+
+        wgpu::RenderPassDescriptor renderPassDesc{};
+        renderPassDesc.colorAttachmentCount = 1;
+        renderPassDesc.colorAttachments     = &colorAttachment;
+
+        wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPassDesc);
+
+        this->debugPipeline.AssertInitialized();
+        pass.SetPipeline(this->debugPipeline.pipeline);
+
+        // Fullscreen triangle
+        pass.Draw(3);
+        pass.End();
+    }
     wgpu::CommandBuffer commandBuffer = encoder.Finish();
     this->wgpuBundle->GetDevice().GetQueue().Submit(1, &commandBuffer);
 }

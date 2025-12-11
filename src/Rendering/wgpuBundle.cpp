@@ -91,55 +91,22 @@ void WgpuBundle::ConfigureSurface()
 //================================//
 void WgpuBundle::ComputeLimits()
 {
-    // Adapter limits MUST already be loaded via:
-    // adapter.GetLimits(&this->limits);
-
-    // ---------------------------------------
-    // DO NOT TOUCH BUFFER LIMITS (CRITICAL)
-    // ---------------------------------------
-    // Dawn uses large internal storage buffers.
-    // Reducing these causes the 2GB uploader crash.
-
-    // this->limits.maxBufferSize               <-- leave untouched
-    // this->limits.maxStorageBufferBindingSize <-- leave untouched
-    // this->limits.maxStorageBuffersPerShaderStage <-- leave untouched
-
-
-    // ---------------------------------------
-    // STORAGE TEXTURES (you use exactly 2)
-    // ---------------------------------------
     this->limits.maxStorageTexturesPerShaderStage =
         std::max(this->limits.maxStorageTexturesPerShaderStage, 2u);
-
-
-    // ---------------------------------------
-    // TEXTURE DIMENSIONS
-    // ---------------------------------------
-    // These must be >= what you create
-
     this->limits.maxTextureDimension2D =
         std::max(this->limits.maxTextureDimension2D,
                  static_cast<uint32_t>(
                      std::max(MAXIMUM_WINDOW_WIDTH, MAXIMUM_WINDOW_HEIGHT)));
-
     this->limits.maxTextureDimension3D =
         std::max(this->limits.maxTextureDimension3D,
                  static_cast<uint32_t>(MAXIMUM_VOXEL_RESOLUTION / 4));
 
-
-    // ---------------------------------------
-    // UNIFORMS (small, aligned)
-    // ---------------------------------------
     this->limits.maxUniformBuffersPerShaderStage =
         std::max(this->limits.maxUniformBuffersPerShaderStage, 1u);
 
     this->limits.maxUniformBufferBindingSize =
         std::max(static_cast<uint32_t>(this->limits.maxUniformBufferBindingSize), 256u);
 
-
-    // ---------------------------------------
-    // COMPUTE LIMITS
-    // ---------------------------------------
     this->limits.maxComputeWorkgroupSizeX =
         std::max(this->limits.maxComputeWorkgroupSizeX, 8u);
     this->limits.maxComputeWorkgroupSizeY =
@@ -149,9 +116,6 @@ void WgpuBundle::ComputeLimits()
 
     this->limits.maxComputeInvocationsPerWorkgroup =
         std::max(this->limits.maxComputeInvocationsPerWorkgroup, 64u);
-
-    // Dispatch grid (leave adapter default — you depend on it)
-    // maxComputeWorkgroupsPerDimension unchanged
 }
 
 //================================//
@@ -161,5 +125,6 @@ void WgpuBundle::Resize(int newWidth, int newHeight)
     this->currentHeight = newHeight;
     this->ConfigureSurface();
 
+    std::cout << "[wgpuBundle] Window resized to " << newWidth << "x" << newHeight << std::endl;
     this->resizeFlag = true;
 }

@@ -49,7 +49,7 @@ if(EMSCRIPTEN)
   set(DCMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "" FORCE) # Disable C++ modules for Emscripten
   set_target_properties(Skyegrid PROPERTIES SUFFIX ".html")
   target_link_libraries(Skyegrid PRIVATE emdawnwebgpu_cpp webgpu_glfw igl::core)
-  target_link_options(Skyegrid PRIVATE "-sASYNCIFY=1" "-sUSE_GLFW=3" "--preload-file=${CMAKE_SOURCE_DIR}/Shaders@/Shaders")
+  target_link_options(Skyegrid PRIVATE "-sINITIAL_MEMORY=64MB" "-sALLOW_MEMORY_GROWTH=1" "-sASYNCIFY=1" "-sUSE_GLFW=3" "--preload-file=${CMAKE_SOURCE_DIR}/Shaders@/Shaders")
 
 else()
 

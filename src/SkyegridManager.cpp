@@ -36,6 +36,14 @@ SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(
     this->wgpuBundle = std::make_unique<WgpuBundle>(windowFormat);
     this->renderEngine = std::make_unique<RenderEngine>(this->wgpuBundle.get());
 
+    // Initialize Camera position
+    this->renderEngine->GetCamera()->SetFov(45.0f);
+    float r = static_cast<float>(MAXIMUM_VOXEL_RESOLUTION);
+
+    this->renderEngine->GetCamera()->SetPosition(Eigen::Vector3f(r / 2.0f, r / 2.0f, -r * 1.5f));
+    this->renderEngine->GetCamera()->LookAtPoint(Eigen::Vector3f(r / 2.0f, r / 2.0f, r / 2.0f));
+    this->renderEngine->GetCamera()->ValidatePixelToRayMatrix();
+
     this->correctlyInitialized = true;
 }
 
@@ -101,6 +109,17 @@ void SkyegridManager::ProcessEvents(float deltaTime)
 
     Camera* camera = this->renderEngine->GetCamera();
 
+    // Move Speed based on voxel grid size
+    float r = static_cast<float>(MAXIMUM_VOXEL_RESOLUTION);
+    float moveSpeed = movementSpeed * r / 100.0f;
+
+    // If shift is held, increase speed
+    if (glfwGetKey(this->window.get(), GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+        glfwGetKey(this->window.get(), GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
+    {
+        moveSpeed *= 3.0f;
+    }
+
     Eigen::Vector3f rotationDelta(0.0f, 0.0f, 0.0f);
     if (glfwGetKey(this->window.get(), GLFW_KEY_Q) == GLFW_PRESS)
         rotationDelta.y() -= rotationSpeed * deltaTime * 60.0f;
@@ -109,13 +128,13 @@ void SkyegridManager::ProcessEvents(float deltaTime)
 
     Eigen::Vector3f movementDelta(0.0f, 0.0f, 0.0f);
     if (glfwGetKey(this->window.get(), GLFW_KEY_W) == GLFW_PRESS)
-        movementDelta.z() += movementSpeed * deltaTime * 60.0f;
+        movementDelta.z() += moveSpeed * deltaTime * 60.0f;
     if (glfwGetKey(this->window.get(), GLFW_KEY_S) == GLFW_PRESS)
-        movementDelta.z() -= movementSpeed * deltaTime * 60.0f;
+        movementDelta.z() -= moveSpeed * deltaTime * 60.0f;
     if (glfwGetKey(this->window.get(), GLFW_KEY_A) == GLFW_PRESS)
-        movementDelta.x() -= movementSpeed * deltaTime * 60.0f;
+        movementDelta.x() -= moveSpeed * deltaTime * 60.0f;
     if (glfwGetKey(this->window.get(), GLFW_KEY_D) == GLFW_PRESS)
-        movementDelta.x() += movementSpeed * deltaTime * 60.0f;
+        movementDelta.x() += moveSpeed * deltaTime * 60.0f;
     
     camera->Rotate(rotationDelta);
     camera->Move(movementDelta);

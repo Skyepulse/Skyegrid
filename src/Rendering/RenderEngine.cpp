@@ -1,43 +1,7 @@
 #include "../../includes/Rendering/RenderEngine.hpp"
 #include <iostream>
 #include "../../includes/constants.hpp"
-
-//================================//
-static void PackVoxelsRGBA32UI(
-    const std::vector<std::vector<std::vector<uint8_t>>>& voxels,
-    uint32_t resolution,
-    std::vector<uint32_t>& outTexels
-)
-{
-    const uint32_t texX = resolution / 4;
-    const uint32_t texY = resolution / 4;
-    const uint32_t texZ = resolution / 8;
-
-    outTexels.assign(texX * texY * texZ * 4, 0u);
-
-    auto texelIndex = [&](uint32_t x, uint32_t y, uint32_t z) {
-        return (x + y * texX + z * texX * texY) * 4;
-    };
-
-    for (uint32_t z = 0; z < resolution; ++z)
-    for (uint32_t y = 0; y < resolution; ++y)
-    for (uint32_t x = 0; x < resolution; ++x)
-    {
-        if (!voxels[x][y][z])
-            continue;
-
-        uint32_t tx = x / 4;
-        uint32_t ty = y / 4;
-        uint32_t tz = z / 8;
-
-        uint32_t channel = x % 4;
-        uint32_t bit =
-            (y % 4) +
-            (z % 8) * 4;
-
-        outTexels[texelIndex(tx, ty, tz) + channel] |= (1u << bit);
-    }
-}
+#include <time.h>
 
 //================================//
 void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
@@ -101,14 +65,73 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
 }
 
 //================================//
+void RenderEngine::SetPackedVoxel(uint32_t x, uint32_t y, uint32_t z, bool on)
+{
+    const uint32_t res = MAXIMUM_VOXEL_RESOLUTION;
+    const uint32_t texX = res / 4;
+    const uint32_t texY = res / 4;
+
+    const uint32_t desiredX = x / 4;
+    const uint32_t desiredY = y / 4;
+    const uint32_t desiredZ = z / 8;
+
+    const uint32_t channel = x % 4;
+    const uint32_t bit = (y % 4) + (z % 8) * 4; // 0..31
+    const uint32_t mask = 1u << bit;
+
+    const uint32_t texelBase = (desiredX + desiredY * texX + desiredZ * texX * texY) * 4;
+
+    // Get reference to the correct word
+    uint32_t& word = this->texelInfo[texelBase + channel];
+
+    if (on) word |= mask;
+    else    word &= ~mask;
+}
+
+//================================//
 void RenderEngine::PackVoxelDataToGPU()
 {
     std::cout << "Packing voxel data to GPU...\n";
+    const float startTime = static_cast<float>(clock()) / CLOCKS_PER_SEC;
 
-    std::vector<uint32_t> packed;
-    PackVoxelsRGBA32UI(this->voxelDataCache, MAXIMUM_VOXEL_RESOLUTION, packed);
+    const size_t res = static_cast<size_t>(MAXIMUM_VOXEL_RESOLUTION);
+    const uint32_t texX = res / 4;
+    const uint32_t texY = res / 4;
+    const uint32_t texZ = res / 8;
 
-    std::cout << "Total size of packed voxel data in bytes: " << packed.size() * sizeof(uint32_t) << "\n";
+    texelInfo.assign(texX * texY * texZ * 4, 0u);
+
+    // Cube edges
+    for (int x = 0; x < MAXIMUM_VOXEL_RESOLUTION; ++x)
+    for (int y = 0; y < MAXIMUM_VOXEL_RESOLUTION; ++y)
+    for (int z = 0; z < MAXIMUM_VOXEL_RESOLUTION; ++z)
+    {
+        bool edge =
+            // edges parallel to X
+            ((y == 0 || y == MAXIMUM_VOXEL_RESOLUTION - 1) &&
+            (z == 0 || z == MAXIMUM_VOXEL_RESOLUTION - 1)) ||
+
+            // edges parallel to Y
+            ((x == 0 || x == MAXIMUM_VOXEL_RESOLUTION - 1) &&
+            (z == 0 || z == MAXIMUM_VOXEL_RESOLUTION - 1)) ||
+
+            // edges parallel to Z
+            ((x == 0 || x == MAXIMUM_VOXEL_RESOLUTION - 1) &&
+            (y == 0 || y == MAXIMUM_VOXEL_RESOLUTION - 1));
+
+        if (edge)
+            this->SetPackedVoxel(x, y, z, true);
+    }
+
+    // Cube in the exact middle
+    for (int x = MAXIMUM_VOXEL_RESOLUTION / 4; x < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++x)
+    for (int y = MAXIMUM_VOXEL_RESOLUTION / 4; y < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++y)
+    for (int z = MAXIMUM_VOXEL_RESOLUTION / 4; z < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++z)
+    {
+        this->SetPackedVoxel(x, y, z, true);
+    }
+    
+    std::cout << "Total size of packed voxel data in bytes: " << texelInfo.size() * sizeof(uint32_t) << "\n";
 
     wgpu::TexelCopyTextureInfo textureCopyDesc{};
     textureCopyDesc.texture = this->computeVoxelPipeline.associatedTextures[1];
@@ -128,12 +151,14 @@ void RenderEngine::PackVoxelDataToGPU()
 
     this->wgpuBundle->GetDevice().GetQueue().WriteTexture(
         &textureCopyDesc,
-        packed.data(),
-        packed.size() * sizeof(uint32_t),
+        this->texelInfo.data(),
+        this->texelInfo.size() * sizeof(uint32_t),
         &bufferLayout,
         &copySize
     );
 
+    const float endTime = static_cast<float>(clock()) / CLOCKS_PER_SEC;
+    std::cout << "Voxel data packing took " << (endTime - startTime) << " seconds.\n";
     std::cout << "Voxel data packed to GPU successfully.\n";
 }
 

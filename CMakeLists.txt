@@ -22,6 +22,8 @@ set(SRC_FILES
   includes/constants.hpp
   includes/Rendering/Camera/Camera.hpp
   src/Rendering/Camera/Camera.cpp
+  src/VoxelManager.cpp
+  includes/VoxelManager.hpp
 )
 
 add_executable(Skyegrid ${SRC_FILES})

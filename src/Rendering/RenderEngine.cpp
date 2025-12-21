@@ -31,23 +31,44 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     // Compute pipeline bind group
     // Bind Group
     this->computeVoxelPipeline.bindGroup = nullptr;
-    std::vector<wgpu::BindGroupEntry> bindGroupEntries(3);
+    std::vector<wgpu::BindGroupEntry> entries(6);
 
-    bindGroupEntries[0].binding = 0;
-    bindGroupEntries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
+    entries[0].binding = 0;
+    entries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
 
-    bindGroupEntries[1].binding = 1;
-    bindGroupEntries[1].textureView = this->computeVoxelPipeline.associatedTextureViews[1];
+    entries[1].binding = 1;
+    entries[1].buffer = this->computeVoxelPipeline.associatedUniforms[0];
+    entries[1].offset = 0;
+    entries[1].size = this->computeVoxelPipeline.uniformSizes[0];
 
-    bindGroupEntries[2].binding = 2;
-    bindGroupEntries[2].buffer = this->computeVoxelPipeline.associatedUniforms[0];
-    bindGroupEntries[2].offset = 0;
-    bindGroupEntries[2].size = this->computeVoxelPipeline.uniformSizes[0];
+    // Brick grid
+    entries[2].binding = 2;
+    entries[2].buffer = this->voxelManager->brickGridBuffer;
+    entries[2].offset = 0;
+    entries[2].size = this->voxelManager->brickGridBuffer.GetSize();
+
+    // Brick pool
+    entries[3].binding = 3;
+    entries[3].buffer = this->voxelManager->brickPoolBuffer;
+    entries[3].offset = 0;
+    entries[3].size = this->voxelManager->brickPoolBuffer.GetSize();
+
+    // Color pool
+    entries[4].binding = 4;
+    entries[4].buffer = this->voxelManager->colorPoolBuffer;
+    entries[4].offset = 0;
+    entries[4].size = this->voxelManager->colorPoolBuffer.GetSize();
+
+    // Feedback buffer
+    entries[5].binding = 5;
+    entries[5].buffer = this->voxelManager->feedBackBuffer;
+    entries[5].offset = 0;
+    entries[5].size = this->voxelManager->feedBackBuffer.GetSize();
 
     wgpu::BindGroupDescriptor bindGroupDesc{};
     bindGroupDesc.layout = this->computeVoxelPipeline.bindGroupLayout;
-    bindGroupDesc.entryCount = static_cast<uint32_t>(bindGroupEntries.size());
-    bindGroupDesc.entries = bindGroupEntries.data();
+    bindGroupDesc.entryCount = static_cast<uint32_t>(entries.size());
+    bindGroupDesc.entries = entries.data();
     this->computeVoxelPipeline.bindGroup = this->wgpuBundle->GetDevice().CreateBindGroup(&bindGroupDesc);
 
     // Blit pipeline bind group
@@ -62,104 +83,6 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     blitBindGroupDesc.entryCount = 2;
     blitBindGroupDesc.entries = blitEntries;
     this->blitVoxelPipeline.bindGroup = this->wgpuBundle->GetDevice().CreateBindGroup(&blitBindGroupDesc);
-}
-
-//================================//
-void RenderEngine::SetPackedVoxel(uint32_t x, uint32_t y, uint32_t z, bool on)
-{
-    const uint32_t res = MAXIMUM_VOXEL_RESOLUTION;
-    const uint32_t texX = res / 4;
-    const uint32_t texY = res / 4;
-
-    const uint32_t desiredX = x / 4;
-    const uint32_t desiredY = y / 4;
-    const uint32_t desiredZ = z / 8;
-
-    const uint32_t channel = x % 4;
-    const uint32_t bit = (y % 4) + (z % 8) * 4; // 0..31
-    const uint32_t mask = 1u << bit;
-
-    const uint32_t texelBase = (desiredX + desiredY * texX + desiredZ * texX * texY) * 4;
-
-    // Get reference to the correct word
-    uint32_t& word = this->texelInfo[texelBase + channel];
-
-    if (on) word |= mask;
-    else    word &= ~mask;
-}
-
-//================================//
-void RenderEngine::PackVoxelDataToGPU()
-{
-    std::cout << "Packing voxel data to GPU...\n";
-    const float startTime = static_cast<float>(clock()) / CLOCKS_PER_SEC;
-
-    const size_t res = static_cast<size_t>(MAXIMUM_VOXEL_RESOLUTION);
-    const uint32_t texX = res / 4;
-    const uint32_t texY = res / 4;
-    const uint32_t texZ = res / 8;
-
-    texelInfo.assign(texX * texY * texZ * 4, 0u);
-
-    // Cube edges
-    for (int x = 0; x < MAXIMUM_VOXEL_RESOLUTION; ++x)
-    for (int y = 0; y < MAXIMUM_VOXEL_RESOLUTION; ++y)
-    for (int z = 0; z < MAXIMUM_VOXEL_RESOLUTION; ++z)
-    {
-        bool edge =
-            // edges parallel to X
-            ((y == 0 || y == MAXIMUM_VOXEL_RESOLUTION - 1) &&
-            (z == 0 || z == MAXIMUM_VOXEL_RESOLUTION - 1)) ||
-
-            // edges parallel to Y
-            ((x == 0 || x == MAXIMUM_VOXEL_RESOLUTION - 1) &&
-            (z == 0 || z == MAXIMUM_VOXEL_RESOLUTION - 1)) ||
-
-            // edges parallel to Z
-            ((x == 0 || x == MAXIMUM_VOXEL_RESOLUTION - 1) &&
-            (y == 0 || y == MAXIMUM_VOXEL_RESOLUTION - 1));
-
-        if (edge)
-            this->SetPackedVoxel(x, y, z, true);
-    }
-
-    // Cube in the exact middle
-    for (int x = MAXIMUM_VOXEL_RESOLUTION / 4; x < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++x)
-    for (int y = MAXIMUM_VOXEL_RESOLUTION / 4; y < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++y)
-    for (int z = MAXIMUM_VOXEL_RESOLUTION / 4; z < 3 * MAXIMUM_VOXEL_RESOLUTION / 4; ++z)
-    {
-        this->SetPackedVoxel(x, y, z, true);
-    }
-    
-    std::cout << "Total size of packed voxel data in bytes: " << texelInfo.size() * sizeof(uint32_t) << "\n";
-
-    wgpu::TexelCopyTextureInfo textureCopyDesc{};
-    textureCopyDesc.texture = this->computeVoxelPipeline.associatedTextures[1];
-    textureCopyDesc.mipLevel = 0;
-    textureCopyDesc.origin = { 0, 0, 0 };
-    textureCopyDesc.aspect = wgpu::TextureAspect::All;
-
-    wgpu::TexelCopyBufferLayout bufferLayout{};
-    bufferLayout.offset = 0;
-    bufferLayout.bytesPerRow = MAXIMUM_VOXEL_RESOLUTION / 4 * 4 * sizeof(uint32_t);
-    bufferLayout.rowsPerImage = MAXIMUM_VOXEL_RESOLUTION / 4;
-
-    wgpu::Extent3D copySize{};
-    copySize.width = MAXIMUM_VOXEL_RESOLUTION / 4;
-    copySize.height = MAXIMUM_VOXEL_RESOLUTION / 4;
-    copySize.depthOrArrayLayers = MAXIMUM_VOXEL_RESOLUTION / 8;
-
-    this->wgpuBundle->GetDevice().GetQueue().WriteTexture(
-        &textureCopyDesc,
-        this->texelInfo.data(),
-        this->texelInfo.size() * sizeof(uint32_t),
-        &bufferLayout,
-        &copySize
-    );
-
-    const float endTime = static_cast<float>(clock()) / CLOCKS_PER_SEC;
-    std::cout << "Voxel data packing took " << (endTime - startTime) << " seconds.\n";
-    std::cout << "Voxel data packed to GPU successfully.\n";
 }
 
 //================================//
@@ -196,12 +119,37 @@ void RenderEngine::Render(void* userData)
 
     wgpu::TextureView swapchainView = currentTexture.texture.CreateView();
 
+    // Update voxel data:
+    this->voxelManager->update(*this->wgpuBundle);
+
     // Command Encoder
     wgpu::Queue queue = this->wgpuBundle->GetDevice().GetQueue();
     wgpu::CommandEncoderDescriptor cmdDesc{};
     wgpu::CommandEncoder encoder = this->wgpuBundle->GetDevice().CreateCommandEncoder(&cmdDesc);
 
-    // Compute pass
+    // Upload pass
+    this->computeUploadVoxelPipeline.AssertConsistent();
+    {
+        wgpu::ComputePassDescriptor computePassDesc{};
+        computePassDesc.timestampWrites = nullptr;
+        wgpu::ComputePassEncoder pass = encoder.BeginComputePass(&computePassDesc);
+
+        this->computeUploadVoxelPipeline.AssertInitialized();
+        pass.SetPipeline(this->computeUploadVoxelPipeline.computePipeline);
+        pass.SetBindGroup(0, this->computeUploadVoxelPipeline.bindGroup);
+
+        // Dispatch size based on upload buffer size, filled by CPU
+        const uint32_t uploadCount = this->voxelManager->pendingUploadCount;
+        if (uploadCount > 0)
+        {
+            uint32_t dispatchX = (uploadCount + 63) / 64;
+            pass.DispatchWorkgroups(dispatchX, 1, 1);
+        }
+
+        pass.End();
+    }
+
+    // Compute pass (Raytracing)
     this->computeVoxelPipeline.AssertConsistent();
     {
         // Write Uniform
@@ -232,6 +180,8 @@ void RenderEngine::Render(void* userData)
         pass.DispatchWorkgroups(dispatchX, dispatchY, 1);
         pass.End();
     }
+
+    this->voxelManager->readFeedback(*this->wgpuBundle);
 
     // Blit pass
     this->blitVoxelPipeline.AssertConsistent();

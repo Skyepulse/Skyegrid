@@ -57,7 +57,17 @@ void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pi
 void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
 {
     pipelineWrapper.isCompute = true;
-    InitComputeVoxelPipelineResources(pipelineWrapper, MAXIMUM_VOXEL_RESOLUTION, COMPUTE_VOXEL_UNIFORM_SIZE);
+
+    // WE SHOULD ENFORCE voxelResolution % 8 == 0
+    assert(MAXIMUM_VOXEL_RESOLUTION % 8 == 0);
+    assert(MAXIMUM_VOXEL_RESOLUTION % 64 == 0);
+
+    // Number of textures: 1 (the output voxel texture)
+    pipelineWrapper.textureSizes.resize(1);
+    
+    // Number of Uniforms: 1 (voxel parameters)
+    pipelineWrapper.uniformSizes.resize(1);
+    pipelineWrapper.uniformSizes[0] = AlignUp(COMPUTE_VOXEL_UNIFORM_SIZE, 256); // Uniform buffer size must be 256-byte aligned
 
     // SHADER 
     std::string shaderCode;
@@ -78,24 +88,9 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
 
     // Textures
-    pipelineWrapper.associatedTextures.resize(2);
-    pipelineWrapper.associatedTextureViews.resize(2);
+    pipelineWrapper.associatedTextures.resize(1);
+    pipelineWrapper.associatedTextureViews.resize(1);
     pipelineWrapper.associatedUniforms.resize(1);
-
-    wgpu::TextureDescriptor textureDescriptor{};
-    wgpu::TextureViewDescriptor viewDescriptor{};
-
-    textureDescriptor.dimension = wgpu::TextureDimension::e3D;
-    textureDescriptor.size = { MAXIMUM_VOXEL_RESOLUTION / 4, MAXIMUM_VOXEL_RESOLUTION / 4, MAXIMUM_VOXEL_RESOLUTION / 8 };
-    textureDescriptor.sampleCount = 1;
-    textureDescriptor.mipLevelCount = 1;
-    textureDescriptor.format = wgpu::TextureFormat::RGBA32Uint;
-    textureDescriptor.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopyDst;
-    pipelineWrapper.associatedTextures[1] = wgpuBundle.GetDevice().CreateTexture(&textureDescriptor);
-
-    viewDescriptor.dimension = wgpu::TextureViewDimension::e3D;
-    viewDescriptor.format = textureDescriptor.format;
-    pipelineWrapper.associatedTextureViews[1] = pipelineWrapper.associatedTextures[1].CreateView(&viewDescriptor);
 
     // Uniforms
     wgpu::BufferDescriptor uniformBufferDesc{};
@@ -105,32 +100,45 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     pipelineWrapper.associatedUniforms[0] = wgpuBundle.GetDevice().CreateBuffer(&uniformBufferDesc);
 
     // Bind Group Layout
-    wgpu::BindGroupLayoutEntry textureBindingEntries[3]{};
+    wgpu::BindGroupLayoutEntry entries[6]{};
 
-        // output texture
-    textureBindingEntries[0].binding = 0;
-    textureBindingEntries[0].visibility = wgpu::ShaderStage::Compute;
-    textureBindingEntries[0].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    textureBindingEntries[0].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
-    textureBindingEntries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::e2D;
+    // output texture
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+    entries[0].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+    entries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::e2D;
 
-        // voxel storage texture
-    textureBindingEntries[1].binding = 1;
-    textureBindingEntries[1].visibility = wgpu::ShaderStage::Compute;
-    textureBindingEntries[1].storageTexture.access = wgpu::StorageTextureAccess::ReadOnly;
-    textureBindingEntries[1].storageTexture.format = wgpu::TextureFormat::RGBA32Uint;
-    textureBindingEntries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::e3D;
+    // voxel parameters uniform
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].buffer.type = wgpu::BufferBindingType::Uniform;
+    entries[1].buffer.minBindingSize = pipelineWrapper.uniformSizes[0];
+    entries[1].buffer.hasDynamicOffset = false;
 
-        // voxel parameters uniform
-    textureBindingEntries[2].binding = 2;
-    textureBindingEntries[2].visibility = wgpu::ShaderStage::Compute;
-    textureBindingEntries[2].buffer.type = wgpu::BufferBindingType::Uniform;
-    textureBindingEntries[2].buffer.minBindingSize = pipelineWrapper.uniformSizes[0];
-    textureBindingEntries[2].buffer.hasDynamicOffset = false;
+    // BrickGrid
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // BrickPool
+    entries[3].binding = 3;
+    entries[3].visibility = wgpu::ShaderStage::Compute;
+    entries[3].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // ColorPool
+    entries[4].binding = 4;
+    entries[4].visibility = wgpu::ShaderStage::Compute;
+    entries[4].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // Feedback Buffer
+    entries[5].binding = 5;
+    entries[5].visibility = wgpu::ShaderStage::Compute;
+    entries[5].buffer.type = wgpu::BufferBindingType::Storage;
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-    bindGroupLayoutDesc.entryCount = 3;
-    bindGroupLayoutDesc.entries = textureBindingEntries;
+    bindGroupLayoutDesc.entryCount = 6;
+    bindGroupLayoutDesc.entries = entries;
     pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
     // Pipeline Layout
@@ -151,26 +159,69 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
 }
 
 //================================//
-void InitComputeVoxelPipelineResources(RenderPipelineWrapper& pipelineWrapper, size_t voxelResolution, size_t voxelParamSize)
+void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
 {
-    // WE SHOULD ENFORCE voxelResolution % 8 == 0
-    assert(voxelResolution % 8 == 0);
-    assert(voxelResolution % 64 == 0);
+    pipelineWrapper.isCompute = true;
 
-    // We initialize here the buffers sizes, in order to have the limits when querying
-    // the device capabilities for buffer sizes.
+    // SHADER 
+    std::string shaderCode;
+    if (getShaderCodeFromFile("Shaders/computeUploadVoxel.wgsl", shaderCode) < 0)
+    {
+        throw std::runtime_error(
+            "[PIPELINES] Failed to load compute upload voxel shader code from path: " +
+            (getExecutableDirectory() / "Shaders/computeUploadVoxel.wgsl").string()
+        );
+    }
 
-    // Number of textures: 2 (the output voxel texture, the texel voxel storage texture)
-    pipelineWrapper.textureSizes.resize(2);
-    size_t texelCount = (voxelResolution * voxelResolution * voxelResolution) / (4 * 4 * 8);
-    pipelineWrapper.textureSizes[1] = texelCount * 16; // Texel is size of uvec4 = 16 bytes
-    
-    // Number of Uniforms: 1 (voxel parameters)
-    pipelineWrapper.uniformSizes.resize(1);
-    pipelineWrapper.uniformSizes[0] = AlignUp(voxelParamSize, 256); // Uniform buffer size must be 256-byte aligned
+    wgpu::ShaderSourceWGSL wgsl{};
+    wgsl.code = shaderCode.c_str();
 
-    // Number of other buffers: 0
-    pipelineWrapper.bufferSizes.resize(0);
+    wgpu::ShaderModuleDescriptor shaderModuleDesc{};
+    shaderModuleDesc.nextInChain = &wgsl;
+
+    pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
+
+    // Bind Group Layout
+    wgpu::BindGroupLayoutEntry entries[4]{};
+
+    // Read upload buffer
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // BrickPool, colorPool, BrickGrid
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].buffer.type = wgpu::BufferBindingType::Storage;
+
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::Storage;
+
+    entries[3].binding = 3;
+    entries[3].visibility = wgpu::ShaderStage::Compute;
+    entries[3].buffer.type = wgpu::BufferBindingType::Storage;
+
+    wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
+    bindGroupLayoutDesc.entryCount = 4;
+    bindGroupLayoutDesc.entries = entries;
+    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+
+    // Pipeline Layout
+    wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
+    pipelineLayoutDesc.bindGroupLayoutCount = 1;
+    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
+
+    // Compute Pipeline
+    wgpu::ComputePipelineDescriptor computePipelineDesc{};
+    computePipelineDesc.layout = pipelineWrapper.pipelineLayout;
+    computePipelineDesc.compute.module = pipelineWrapper.shaderModule;
+    computePipelineDesc.compute.entryPoint = "c";
+    pipelineWrapper.computePipeline = wgpuBundle.GetDevice().CreateComputePipeline(&computePipelineDesc);
+
+    pipelineWrapper.init = 1;
+    pipelineWrapper.AssertConsistent();
 }
 
 //================================//
@@ -199,23 +250,23 @@ void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipe
     }
 
     // Bind Group Layout
-    wgpu::BindGroupLayoutEntry textureBindingEntries[2]{};
+    wgpu::BindGroupLayoutEntry entries[2]{};
 
         // blit texture
-    textureBindingEntries[0].binding = 0;
-    textureBindingEntries[0].visibility = wgpu::ShaderStage::Fragment;
-    textureBindingEntries[0].texture.sampleType = wgpu::TextureSampleType::Float;
-    textureBindingEntries[0].texture.viewDimension = wgpu::TextureViewDimension::e2D;
-    textureBindingEntries[0].texture.multisampled = false;
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Fragment;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+    entries[0].texture.multisampled = false;
 
         // blit sampler
-    textureBindingEntries[1].binding = 1;
-    textureBindingEntries[1].visibility = wgpu::ShaderStage::Fragment;
-    textureBindingEntries[1].sampler.type = wgpu::SamplerBindingType::Filtering;
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Fragment;
+    entries[1].sampler.type = wgpu::SamplerBindingType::Filtering;
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 2;
-    bindGroupLayoutDesc.entries = textureBindingEntries;
+    bindGroupLayoutDesc.entries = entries;
     pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
     // Pipeline Layout

@@ -3,6 +3,7 @@
 
 #include "wgpuBundle.hpp"
 #include "wgpuHelpers.hpp"
+#include "../VoxelManager.hpp"
 #include "Pipelines/pipelines.hpp"
 #include <Eigen/Core>
 #include "Camera/Camera.hpp"
@@ -45,11 +46,13 @@ public:
 
         CreateRenderPipelineDebug(*this->wgpuBundle, this->debugPipeline);
         CreateComputeVoxelPipeline(*this->wgpuBundle, this->computeVoxelPipeline);
+        CreateComputeUploadVoxelPipeline(*this->wgpuBundle, this->computeUploadVoxelPipeline);
         CreateBlitVoxelPipeline(*this->wgpuBundle, this->blitVoxelPipeline);
 
-        std::cout << "[RenderEngine] Render Engine initialized successfully.\n";
+        this->voxelManager->initBuffers(*this->wgpuBundle);
+        this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 
-        this->PackVoxelDataToGPU();
+        std::cout << "[RenderEngine] Render Engine initialized successfully.\n";
     }
     ~RenderEngine() = default;
 
@@ -61,11 +64,10 @@ public:
 private:
 
     void RebuildVoxelPipelineResources(const RenderInfo& renderInfo);
-    void PackVoxelDataToGPU();
-    void SetPackedVoxel(uint32_t x, uint32_t y, uint32_t z, bool on);
 
     RenderPipelineWrapper debugPipeline;
     RenderPipelineWrapper computeVoxelPipeline;
+    RenderPipelineWrapper computeUploadVoxelPipeline;
     RenderPipelineWrapper blitVoxelPipeline;
     WgpuBundle* wgpuBundle;
 
@@ -73,6 +75,7 @@ private:
     std::unique_ptr<Camera> camera;
 
     std::vector<uint32_t> texelInfo;
+    std::unique_ptr<VoxelManager> voxelManager = std::make_unique<VoxelManager>(static_cast<int>(MAXIMUM_VOXEL_RESOLUTION));
 };
 
 #endif // RENDER_ENGINE_HPP

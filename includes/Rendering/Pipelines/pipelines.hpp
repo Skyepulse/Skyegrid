@@ -81,9 +81,7 @@ struct RenderPipelineWrapper
 //================================//
 void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
 void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
+void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
 void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
-
-void InitComputeVoxelPipelineResources(RenderPipelineWrapper& pipelineWrapper, size_t voxelCount, size_t voxelParamSize);
-
 
 #endif // PIPELINES_HPP

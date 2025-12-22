@@ -44,11 +44,14 @@ public:
         WindowFormat windowFormat = bundle->GetWindowFormat();
         this->camera = std::make_unique<Camera>(Eigen::Vector2f(static_cast<float>(windowFormat.width), static_cast<float>(windowFormat.height)));
 
+        std::cout << "[RenderEngine] Creating Pipelines...\n";
         CreateRenderPipelineDebug(*this->wgpuBundle, this->debugPipeline);
         CreateComputeVoxelPipeline(*this->wgpuBundle, this->computeVoxelPipeline);
         CreateComputeUploadVoxelPipeline(*this->wgpuBundle, this->computeUploadVoxelPipeline);
         CreateBlitVoxelPipeline(*this->wgpuBundle, this->blitVoxelPipeline);
+        std::cout << "[RenderEngine] Creating pipelines completed.\n";
 
+        std::cout << "[RenderEngine] Initializing Voxel Manager...\n";
         this->voxelManager->initBuffers(*this->wgpuBundle);
         this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 

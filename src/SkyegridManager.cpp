@@ -63,6 +63,8 @@ void SkyegridManager::RunMainLoop()
     if (!this->correctlyInitialized)
         return;
 
+    std::cout << "[SkyegridManager] Entering main loop...\n";
+
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop_arg(
         [](void* arg)

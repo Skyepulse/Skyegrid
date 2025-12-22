@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "(Windows) Launch Executable",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/Debug/Skyegrid.exe",  // Path to your executable
+      "args": [],                                             // Command-line arguments (if any)
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",                           // Working directory
+      "environment": [],
+      "console": "externalTerminal",                         // Use "integratedTerminal" for VS Code terminal
+      "symbolSearchPath": "${workspaceFolder}/src"          // Path to source files (for breakpoints)
+    }
+  ]
+}

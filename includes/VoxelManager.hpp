@@ -1,12 +1,12 @@
 #ifndef VOXELMANAGER_HPP
 #define VOXELMANAGER_HPP
 
-#include "wgpuBundle.hpp"
+#include "../includes/Rendering/Pipelines/pipelines.hpp"
 #include <cstdint>
 #include <vector>
 #include <atomic>
 
-const int MAX_FEEDBACK = 9000;
+const int MAX_FEEDBACK = 8192;
 const uint32_t MAX_GPU_BRICKS = 8192;
 const int COLOR_BYTES_PER_BRICK = 2048; // 8x8x8 voxels, 1 byte per voxel (RGB packed), aligned to 2048 bytes
 //================================//
@@ -64,9 +64,14 @@ public:
     {
         BrickResolution = resolution / 8; // A brick is 8x8x8 voxels
     };
-    ~VoxelManager();
+    ~VoxelManager()
+    {
+        // free vectors
+        brickMaps.clear();
+        brickGrid.clear();
+    };
 
-    void update(WgpuBundle& wgpuBundle);
+    void update(wgpu::Queue& queue, wgpu::CommandEncoder& encoder);
     void readFeedback(WgpuBundle& wgpuBundle);
 
     void setVoxel(int x, int y, int z, bool filled, ColorRGB color);
@@ -87,8 +92,16 @@ public:
     wgpu::Buffer brickGridBuffer;
     wgpu::Buffer brickPoolBuffer;
     wgpu::Buffer colorPoolBuffer;
-    wgpu::Buffer feedBackBuffer;
+
+    wgpu::Buffer feedbackCountBuffer;
+    wgpu::Buffer CPUfeedbackCountBuffer;
+    wgpu::Buffer feedbackCountRESET;
+
+    wgpu::Buffer feedbackIndicesBuffer;
+    wgpu::Buffer CPUfeedbackIndicesBuffer;
+
     wgpu::Buffer uploadBuffer;
+    wgpu::Buffer CPUuploadBuffer;
 
     std::vector<uint32_t> feedbackRequests;
     std::vector<uint32_t> freeBrickSlots;

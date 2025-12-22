@@ -31,7 +31,7 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     // Compute pipeline bind group
     // Bind Group
     this->computeVoxelPipeline.bindGroup = nullptr;
-    std::vector<wgpu::BindGroupEntry> entries(6);
+    std::vector<wgpu::BindGroupEntry> entries(7);
 
     entries[0].binding = 0;
     entries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
@@ -59,11 +59,17 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     entries[4].offset = 0;
     entries[4].size = this->voxelManager->colorPoolBuffer.GetSize();
 
-    // Feedback buffer
+    // Feedback buffer (Count)
     entries[5].binding = 5;
-    entries[5].buffer = this->voxelManager->feedBackBuffer;
+    entries[5].buffer = this->voxelManager->feedbackCountBuffer;
     entries[5].offset = 0;
-    entries[5].size = this->voxelManager->feedBackBuffer.GetSize();
+    entries[5].size = this->voxelManager->feedbackCountBuffer.GetSize();
+
+    // Feedback buffer (Indices)
+    entries[6].binding = 6;
+    entries[6].buffer = this->voxelManager->feedbackIndicesBuffer;
+    entries[6].offset = 0;
+    entries[6].size = this->voxelManager->feedbackIndicesBuffer.GetSize();
 
     wgpu::BindGroupDescriptor bindGroupDesc{};
     bindGroupDesc.layout = this->computeVoxelPipeline.bindGroupLayout;
@@ -119,13 +125,13 @@ void RenderEngine::Render(void* userData)
 
     wgpu::TextureView swapchainView = currentTexture.texture.CreateView();
 
-    // Update voxel data:
-    this->voxelManager->update(*this->wgpuBundle);
-
     // Command Encoder
     wgpu::Queue queue = this->wgpuBundle->GetDevice().GetQueue();
     wgpu::CommandEncoderDescriptor cmdDesc{};
     wgpu::CommandEncoder encoder = this->wgpuBundle->GetDevice().CreateCommandEncoder(&cmdDesc);
+
+    // Update voxel data:
+    this->voxelManager->update(queue, encoder);
 
     // Upload pass
     this->computeUploadVoxelPipeline.AssertConsistent();

@@ -1,5 +1,5 @@
 #include "../includes/VoxelManager.hpp"
-#include "../includes/Rendering/Pipelines/pipelines.hpp"
+#include <iostream>
 
 //================================//
 // Bit layout (example):
@@ -33,8 +33,13 @@ ColorRGB VoxelManager::computeBrickAverageColor(const BrickMapCPU& brick)
         uint64_t slice = brick.occupancy[z];
         while (slice)
         {
-            uint64_t bit = slice & -slice;
-            int idx = __builtin_ctzll(slice);
+            int idx = 0;
+            uint64_t tmp = slice;
+            while ((tmp & 1ull) == 0ull)
+            {
+                tmp >>= 1;
+                ++idx;
+            }
 
             const ColorRGB& c = brick.colors[z * 64 + idx]; // Slices of 64, 64 * 8 = 512 voxels per brick
             r += c.r;
@@ -42,7 +47,8 @@ ColorRGB VoxelManager::computeBrickAverageColor(const BrickMapCPU& brick)
             b += c.b;
             ++count;
 
-            slice ^= bit; // Clear the lowest set bit, it iterates for all set bits in the brick occupancy
+            // clear lowest set bit
+            slice &= slice - 1; // Clear the lowest set bit
         }
     }
 
@@ -86,15 +92,14 @@ void VoxelManager::setVoxel(int x, int y, int z, bool filled, ColorRGB color)
 }
 
 //================================//
-void VoxelManager::update(WgpuBundle& wgpuBundle)
+void VoxelManager::update(wgpu::Queue& queue, wgpu::CommandEncoder& encoder)
 {
     pendingUploadCount = 0;
 
-    UploadEntry* uploads = static_cast<UploadEntry*>(uploadBuffer.GetMappedRange());
+    // Map the CPU upload buffer (MapWrite | CopySrc)
+    UploadEntry* uploads = static_cast<UploadEntry*>(CPUuploadBuffer.GetMappedRange());
 
-    for (uint32_t brickGridIndex = 0;
-         brickGridIndex < brickMaps.size();
-         ++brickGridIndex)
+    for (uint32_t brickGridIndex = 0; brickGridIndex < brickMaps.size(); ++brickGridIndex)
     {
         BrickMapCPU& brick = brickMaps[brickGridIndex];
 
@@ -124,28 +129,32 @@ void VoxelManager::update(WgpuBundle& wgpuBundle)
         std::memcpy(entry.colors, brick.colors, sizeof(entry.colors));
 
         brickGrid[brickGridIndex].pointer = PackResident(brick.gpuBrickIndex);
-
         brick.dirty = false;
     }
+    CPUuploadBuffer.Unmap();
 
-    uploadBuffer.Unmap();
+    if (pendingUploadCount > 0)
+    {
+        encoder.CopyBufferToBuffer(
+            CPUuploadBuffer, 0,               // Source: CPU upload buffer (MapWrite | CopySrc)
+            uploadBuffer, 0,                  // Destination: GPU upload buffer (Storage | CopyDst)
+            pendingUploadCount * sizeof(UploadEntry)
+        );
+    }
 
-    // Write updated brick grid to GPU
-    wgpuBundle.GetDevice().GetQueue().WriteBuffer(
+    // Set feedback count to 0 for next frame
+    encoder.CopyBufferToBuffer(
+        feedbackCountRESET, 0,            // Source: reset buffer (MapWrite | CopySrc)
+        feedbackCountBuffer, 0,              // Destination: GPU buffer (Storage | CopyDst)
+        sizeof(uint32_t)
+    );
+
+    // Write updated brick grid to GPU (no mapping, just write)
+    queue.WriteBuffer(
         brickGridBuffer,
         0,
         brickGrid.data(),
         brickGrid.size() * sizeof(BrickGridCell)
-    );
-
-    // Empty feedback requests for next frame
-    feedbackRequests.clear();
-    uint32_t empty = 0;
-    wgpuBundle.GetDevice().GetQueue().WriteBuffer(
-        feedBackBuffer,
-        0,
-        &empty,
-        sizeof(uint32_t)
     );
 }
 
@@ -158,6 +167,7 @@ void VoxelManager::readFeedback(WgpuBundle& wgpuBundle)
 //================================//
 void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
 {
+    std::cout << "[VoxelManager] Initializing buffers on CPU side...\n";
     // CPU storage initialization
     this->brickMaps.resize(this->BrickResolution * this->BrickResolution * this->BrickResolution);
     for (BrickMapCPU& brick : this->brickMaps)
@@ -176,46 +186,95 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
         cell.pointer = PackLOD({0,0,0}); // Initialize to empty
     }
 
-    // GPU storage initialization
-    wgpu::BufferDescriptor desc{};
-    desc.size = brickGrid.size() * sizeof(BrickGridCell);
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-
-    wgpu::Queue queue = wgpuBundle.GetDevice().GetQueue();
-    this->brickGridBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
-    queue.WriteBuffer(brickGridBuffer, 0, brickGrid.data(), desc.size);
-
-    // The max number of bricks, is given by the Maximum Voxel Resolution divided by 8 (brick size)
-    std::vector<uint64_t> empty(MAX_GPU_BRICKS * 8, 0);
-    desc.size = MAX_GPU_BRICKS * 8 * sizeof(uint64_t);
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-
-    this->brickPoolBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
-    queue.WriteBuffer(brickPoolBuffer, 0, empty.data(), desc.size);
-
     this->freeBrickSlots.reserve(MAX_GPU_BRICKS);
     for (uint32_t i = 0; i < MAX_GPU_BRICKS; ++i)
         freeBrickSlots.push_back(i);
 
+
+    std::cout << "[VoxelManager] Initializing buffers on GPU side...\n";
+    // GPU storage initialization
+    wgpu::Queue queue = wgpuBundle.GetDevice().GetQueue();
+
+    // [1] BRICK GRID CELL
+    wgpu::BufferDescriptor desc{};
+    desc.size = brickGrid.size() * sizeof(BrickGridCell);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    desc.label = "Brick Grid Buffer";
+    desc.mappedAtCreation = false;
+    this->brickGridBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    queue.WriteBuffer(brickGridBuffer, 0, brickGrid.data(), desc.size);
+
+    // [2] BRICK POOL BUFFER
+    // The max number of bricks, is given by the Maximum Voxel Resolution divided by 8 (brick size)
+    std::vector<uint64_t> empty(MAX_GPU_BRICKS * 8, 0);
+    desc.size = MAX_GPU_BRICKS * 8 * sizeof(uint64_t);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    desc.label = "Brick Pool Buffer";
+    desc.mappedAtCreation = false;
+    this->brickPoolBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    queue.WriteBuffer(brickPoolBuffer, 0, empty.data(), desc.size);
+
+    // [3] COLOR POOL BUFFER
     // 512 voxels * 3 bytes per voxel
     const uint32_t colorPerBrickSize = 2048; // for alignment
     desc.size = MAX_GPU_BRICKS * colorPerBrickSize;
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    desc.label = "Color Pool Buffer";
+    desc.mappedAtCreation = false;
     this->colorPoolBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
 
-    struct FeedBackInit { uint32_t count; };
-    FeedBackInit feedbackInit = { 0 };
+    // [4] FEEDBACK BUFFERS
+    // feedbackCount init is a single uint32_t set to 0
+    uint32_t feedbackCountInit = 0;
+    desc.size = sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    desc.label = "Feedback Count Buffer (GPU)";
+    desc.mappedAtCreation = false;
+    this->feedbackCountBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
 
-    desc.size = sizeof(FeedBackInit) + MAX_FEEDBACK * sizeof(uint32_t);
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    // Reset buffer for feedback count
+    desc.size = sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+    desc.mappedAtCreation = true; // So we can initialize it to 0 right away
+    desc.label = "Feedback Count Reset Buffer (RESET)";
+    this->feedbackCountRESET = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    memcpy(feedbackCountRESET.GetMappedRange(), &feedbackCountInit, sizeof(uint32_t));
+    feedbackCountRESET.Unmap();
 
-    this->feedBackBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
-    queue.WriteBuffer(feedBackBuffer, 0, &feedbackInit, sizeof(FeedBackInit));
+    // CPU feedback count buffer
+    desc.size = sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
+    desc.label = "Feedback Count Buffer (CPU)";
+    desc.mappedAtCreation = false;
+    this->CPUfeedbackCountBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
 
+    // now the feedback indices buffer
+    desc.size = MAX_FEEDBACK * sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc;
+    desc.label = "Feedback Indices Buffer (GPU)";
+    desc.mappedAtCreation = false;
+    this->feedbackIndicesBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+
+    // CPU feedback indices buffer
+    desc.size = MAX_FEEDBACK * sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
+    desc.label = "Feedback Indices Buffer (CPU)";
+    desc.mappedAtCreation = false;
+    this->CPUfeedbackIndicesBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+
+    // Upload buffer initialization
     desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::MapWrite;
-
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    desc.label = "Upload Buffer (GPU)";
+    desc.mappedAtCreation = false;
     this->uploadBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+
+    // CPU upload buffer
+    desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
+    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+    desc.label = "Upload Buffer (CPU)";
+    desc.mappedAtCreation = true;
+    this->CPUuploadBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
 }
 
 //================================//

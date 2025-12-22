@@ -1,5 +1,11 @@
+// Main compute shader for voxel traversal and rendering, will be writing output colors to a texture, and provide
+// feedback to the CPU on which voxel bricks are inside the view, so that we upload and allocate only those bricks.
+
 //================================//
-struct ComputeVoxelParams {
+//         VOXEL STRUCTS          //
+//================================//
+struct ComputeVoxelParams 
+{
     pixelToRay: mat4x4<f32>,
     cameraOrigin: vec3<f32>,
     _pad0: f32,
@@ -9,12 +15,182 @@ struct ComputeVoxelParams {
 };
 
 //================================//
+struct Brick
+{
+    occupancy: array<u32, 16>, // 8 x u64 = 16 x u32
+};
+
+// MAX FEEDBACK SIZE 8192
+const MAX_FEEDBACK: u32 = 8192u;
+
+//================================//
+//           BINDINGS             //
+//================================//
+// Output color texture (will then be blitted to screen)
 @group(0) @binding(0)
 var targetTexture: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(1) 
-var VoxelImage: texture_storage_3d<rgba32uint, read>;
-@group(0) @binding(2)
+// Params
+@group(0) @binding(1)
 var<uniform> params: ComputeVoxelParams;
+// Brick grid
+@group(0) @binding(2)
+var<storage, read_write> brickGrid: array<atomic<u32>>; // atomic write in order to see if already requested by GPU
+// Brick pool
+@group(0) @binding(3)
+var<storage, read> brickPool: array<Brick>;
+// Colors
+@group(0) @binding(4)
+var<storage, read> colorPool: array<u32>; // 512 sized array of packed u32 colors
+// Feedback count buffer
+@group(0) @binding(5)
+var<storage, read_write> feedbackCount: atomic<u32>;
+// Feedback indices buffer
+@group(0) @binding(6)
+var<storage, read_write> feedbackIndices: array<u32>;
+
+//================================//
+//           HELPERS              //
+//================================//
+// Bit layout (example):
+// [31]     : resident flag
+// [30]     : requested flag (GPU feedback)
+// [29:24]  : unused
+// [23:0]   : brick pool index OR packed LOD color
+fn isBrickLoaded(brickIndex: u32) -> bool
+{
+    let pointer = atomicLoad(&brickGrid[brickIndex]);
+    return (pointer & 0x80000000u) != 0u;
+}
+
+//================================//
+fn readVoxelData(worldPos: vec3<f32>) -> bool
+{
+    let voxelCoord: vec3<u32> = worldToVoxelCoord(worldPos);
+    let brickCoord: vec3<u32> = voxelToBrickCoord(voxelCoord);
+    let brickIndex: u32 = brickToIndex(brickCoord);
+    let localCoord: vec3<u32> = voxelToLocalCoord(voxelCoord);
+    let pointer = atomicLoad(&brickGrid[brickIndex]);
+
+    // Check if the pointer, points to a valid brick
+    if isBrickLoaded(brickIndex) == false
+    {
+        writeFeedback(brickIndex);
+        return false;
+    }
+
+    // The adress in the pointer OR LOD COLOR but it is loaded so we know
+    // it is a brick index, so it is in [23:0]
+    let brickSlot: u32 = pointer & 0x00FFFFFFu;
+    let brick: Brick = brickPool[brickSlot];
+    return isVoxelSet(brick, localCoord.x, localCoord.y, localCoord.z);
+}
+
+//================================//
+// We call this in case we get false in readVoxelData (brick not loaded)
+// in the case this color is the empty one, we suppose it is an empty brick
+fn loadLODColor(worldPos: vec3<f32>) -> vec3<f32>
+{
+    let voxelCoord: vec3<u32> = worldToVoxelCoord(worldPos);
+    let brickCoord: vec3<u32> = voxelToBrickCoord(voxelCoord);
+    let brickIndex: u32 = brickToIndex(brickCoord);
+    let pointer = atomicLoad(&brickGrid[brickIndex]);
+
+    // The brick is not loaded, we therefore get the LOD color
+    let packedLOD = pointer & 0x00FFFFFFu; // LOD color is in [23:0]
+
+    // Decode r, g, b
+    let r: f32 = f32((packedLOD >> 16u) & 255u) / 255.0; // red in 16 - 23 bits
+    let g: f32 = f32((packedLOD >> 8u) & 255u) / 255.0; // green in 8 - 15 bits
+    let b: f32 = f32(packedLOD & 255u) / 255.0; // blue in 0 - 7 bits
+
+    return vec3<f32>(r, g, b);
+}
+
+//================================//
+fn isVoxelSet(brick: Brick, x: u32, y: u32, z: u32) -> bool
+{
+    let bit = x + y * 8u;           // 0..63
+    let word = z * 2u + (bit >> 5u); // Which slice
+    let mask = 1u << (bit & 31u);
+    return (brick.occupancy[word] & mask) != 0u;
+}
+
+//================================//
+fn loadColor(brickSlot: u32, voxelIndex: u32) -> vec3<f32>
+{
+    let start = brickSlot * 512u; // We know each brick in the color pool is represented by 512u
+    let packedColor = colorPool[start + voxelIndex];
+
+    // Decode r, g, b
+    let r: f32 = f32((packedColor >> 16u) & 255u) / 255.0; // red in 16 - 23 bits
+    let g: f32 = f32((packedColor >> 8u) & 255u) / 255.0; // green in 8 - 15 bits
+    let b: f32 = f32(packedColor & 255u) / 255.0; // blue in 0 - 7 bits
+
+    return vec3<f32>(r, g, b);
+}
+
+//================================//
+fn writeFeedback(brickIndex: u32)
+{
+    // did we already request this brick?
+    let old = atomicOr(&brickGrid[brickIndex], 0x40000000u); // we read and modify request flag at 30th bit,
+                                            // if it was 0, we set it to 1 and request it. If it was 1, we do nothing (already requested)
+    if (old & 0x40000000u) != 0u
+    {
+        return; // already requested
+    }
+
+    // If not already requested, we write to feedback buffer
+    let index = atomicAdd(&feedbackCount, 1u);
+    if (index < MAX_FEEDBACK)
+    {
+        feedbackIndices[index] = brickIndex;
+    }
+}
+
+//================================//
+// Get voxel coord in [0, voxelResolution - 1]^3
+fn worldToVoxelCoord(position: vec3<f32>) -> vec3<u32> 
+{
+    return vec3<u32>(clamp(floor(position), vec3<f32>(0.0), vec3<f32>(f32(params.voxelResolution) - 1.0)));
+}
+
+//================================//
+fn voxelToBrickCoord(voxelCoord: vec3<u32>) -> vec3<u32>
+{
+    
+    //return vec3<u32>(
+    //    voxelCoord.x / 8u,
+    //    voxelCoord.y / 8u,
+    //    voxelCoord.z / 8u
+    //);
+    
+    return voxelCoord >> vec3<u32>(3u, 3u, 3u); // equivalent to division by 8
+}
+
+//================================//
+fn brickToIndex(brickCoord: vec3<u32>) -> u32
+{
+    let gridResolution: u32 = params.voxelResolution / 8u;
+    return brickCoord.x + brickCoord.y * gridResolution + brickCoord.z * gridResolution * gridResolution;
+}
+
+//================================//
+fn voxelToLocalCoord(voxelCoord: vec3<u32>) -> vec3<u32>
+{
+    return vec3<u32>(
+        voxelCoord.x % 8u,  // local.x in [0, 7]
+        voxelCoord.y % 8u,  // same for y
+        voxelCoord.z % 8u   // same for z
+    );
+}
+
+//================================//
+// will be used in the color pool lookup
+fn localCoordToVoxelIndex(localCoord: vec3<u32>) -> u32
+{
+    return localCoord.x + localCoord.y * 8u + localCoord.z * 64u; // 8 * 8 = 64
+}
 
 //================================//
 @compute @workgroup_size(8, 8, 1)
@@ -40,186 +216,12 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>)
 
     var steps: i32 = 0;
     var color: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
-    let hit = traverseGrid(rayOrigin, rayDir, &color, &steps);
+    //let hit = traverseGrid(rayOrigin, rayDir, &color, &steps);
     
+    color = vec3<f32>(0.5, 0.0, 0.0);
     textureStore(
         targetTexture,
         vec2<i32>(i32(gid.x), i32(gid.y)),
         vec4<f32>(color, 1.0)
     );
-}
-
-//================================//
-fn traverseGrid(rayOrigin: vec3<f32>, rayDir: vec3<f32>, color: ptr<function, vec3<f32>>, steps: ptr<function, i32>) -> bool
-{
-    // Ray sign and inverse
-    let rayDirInv: vec3<f32> = 1.0 / rayDir;
-    let signDir: vec3<f32> = sign(rayDirInv);
-    let clampedRayDirInv: vec3<f32> = clamp(rayDirInv, vec3<f32>(-1e8), vec3<f32>(1e8));
-
-    // Try to find entry and out of slab
-    let t1: vec3<f32> = -rayOrigin * rayDirInv;
-    let t2: vec3<f32> = (vec3<f32>(f32(params.voxelResolution)) - rayOrigin) * rayDirInv;
-
-    let tmin: vec3<f32> = min(t1, t2);
-    let tmax: vec3<f32> = max(t1, t2);
-
-    var tNear: f32 = 0.0;
-    var tFar: f32 = 1e30;
-    for (var i: i32 = 0; i < 3; i = i + 1) 
-    {
-        tNear = max(tNear, tmin[i]);
-        tFar = min(tFar, tmax[i]);
-    }
-
-    // Meaning we don't hit the slab
-    if (tNear > tFar) 
-    {
-        return false;
-    }
-
-    // Find the axis we hit the slab from AABB
-    // 0 -> X, 1 -> Y, 2 -> Z
-    var slabAxis: i32 = 0;
-    if (tmin.x < tmin.y) 
-    {
-        if (tmin.x < tmin.z) 
-        {
-            slabAxis = 0;
-        } 
-        else 
-        {
-            slabAxis = 2;
-        }
-    }
-    else 
-    {
-        if (tmin.y < tmin.z) 
-        {
-            slabAxis = 1;
-        } 
-        else 
-        {
-            slabAxis = 2;
-        }
-    }
-
-    // start at entry point t = tNear
-    let entryPoint: vec3<f32> = rayOrigin + rayDir * tNear;
-    var voxelCoord: vec3<u32> = worldToVoxelCoord(entryPoint);
-
-    // (coord + 0.5 * (signDir + 1))) gives us the coordinate of the next voxel boundary in the ray direction
-    let nextVoxelBoundary: vec3<f32> = (vec3<f32>(voxelCoord) + 0.5 * (signDir + 1.0));
-    var t: vec3<f32> = (nextVoxelBoundary - entryPoint) * rayDirInv; // parametric distance to next voxel boundary
-    let step: vec3<i32> = vec3<i32>(signDir);
-    let delta: vec3<f32> = rayDirInv * signDir;
-
-    // First hit
-    var texelCoord: vec3<i32> = coordToTexelCoord(voxelCoord);
-    var voxelData: vec4<u32> = textureLoad(VoxelImage, texelCoord);
-    var hit: bool = readVoxelData(voxelData, voxelCoord);
-    if (!hit)
-    {
-        // Traversal
-        while (true)
-        {
-            // We find the smalles t amongst t.x, ty, tz
-            // We step along that axis
-            // We increment voxel coord by step[axis]
-            // We increment t[axis] by delta[axis]
-            // We always record the stepped into axis
-
-            (*steps) = (*steps) + 1;
-
-            if (t.x < t.y)
-            {
-                if(t.x < t.z)
-                {
-                    // Step X
-                    voxelCoord.x = u32(i32(voxelCoord.x) + step.x);
-                    t.x = t.x + delta.x;
-                    slabAxis = 0;
-                }
-                else
-                {
-                    // Step Z
-                    voxelCoord.z = u32(i32(voxelCoord.z) + step.z);
-                    t.z = t.z + delta.z;
-                    slabAxis = 2;
-                }
-            }
-            else
-            {
-                if(t.y < t.z)
-                {
-                    // Step Y
-                    voxelCoord.y = u32(i32(voxelCoord.y) + step.y);
-                    t.y = t.y + delta.y;
-                    slabAxis = 1;
-                }
-                else
-                {
-                    // Step Z
-                    voxelCoord.z = u32(i32(voxelCoord.z) + step.z);
-                    t.z = t.z + delta.z;
-                    slabAxis = 2;
-                }
-            }
-
-            // If coord is out of bounds on any axis, we exit
-            if (voxelCoord.x >= params.voxelResolution ||
-                voxelCoord.y >= params.voxelResolution ||
-                voxelCoord.z >= params.voxelResolution) 
-            {
-                return false;
-            }
-
-            // Read voxel data
-            texelCoord = coordToTexelCoord(voxelCoord);
-            voxelData = textureLoad(VoxelImage, texelCoord);
-            hit = readVoxelData(voxelData, voxelCoord);
-
-            if (hit)
-            {
-                break;
-            }
-        }
-    }
-
-    var mask: vec3<f32> = vec3<f32>(0.0);
-    mask[slabAxis] = 1.0;
-
-    // t[mask] holds the exact distance we hit the voxel boundary
-    // We subtract delta[mask] to get the entry point into the voxel
-    var t_hit: f32 = dot(t, mask) - dot(delta, mask);
-
-    let denom = f32(params.voxelResolution - 1u);
-    (*color) = vec3<f32>(
-        f32(voxelCoord.x),
-        f32(voxelCoord.y),
-        f32(voxelCoord.z)
-    ) / denom;
-    return true;
-}
-
-//================================//
-fn worldToVoxelCoord(position: vec3<f32>) -> vec3<u32> 
-{
-    return vec3<u32>(clamp(floor(position), vec3<f32>(0.0), vec3<f32>(f32(params.voxelResolution) - 1.0)));
-}
-
-//================================//
-fn coordToTexelCoord(voxelCoord: vec3<u32>) -> vec3<i32> 
-{
-    return vec3<i32>(
-        i32(voxelCoord.x / 4),
-        i32(voxelCoord.y / 4),
-        i32(voxelCoord.z / 8)
-    );
-}
-
-//================================//
-fn readVoxelData(texel: vec4<u32>, coord: vec3<u32>) -> bool 
-{
-    return bool((texel[coord.x % 4u] >> ((coord.y % 4u) + (coord.z % 8u) * 4u)) & 1u);
 }

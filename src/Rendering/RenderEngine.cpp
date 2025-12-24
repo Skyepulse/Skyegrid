@@ -123,6 +123,11 @@ void RenderEngine::Render(void* userData)
         return;
     }
 
+    this->voxelManager->startOfFrame();
+    this->voxelManager->lastBrickIndex += 50;
+    if (this->voxelManager->lastBrickIndex > this->voxelManager->brickMaps.size())
+        this->voxelManager->lastBrickIndex = this->voxelManager->brickMaps.size(); // Cannot render more than we have
+
     wgpu::TextureView swapchainView = currentTexture.texture.CreateView();
 
     // Command Encoder
@@ -131,11 +136,20 @@ void RenderEngine::Render(void* userData)
     wgpu::CommandEncoder encoder = this->wgpuBundle->GetDevice().CreateCommandEncoder(&cmdDesc);
 
     // Update voxel data:
-    this->voxelManager->update(queue, encoder);
+    this->voxelManager->update(*this->wgpuBundle, queue, encoder);
 
     // Upload pass
+    const uint32_t uploadCount = this->voxelManager->pendingUploadCount;
     this->computeUploadVoxelPipeline.AssertConsistent();
     {
+        // Write uniform
+        queue.WriteBuffer(
+            this->voxelManager->uploadCountUniform,
+            0,
+            &uploadCount,
+            sizeof(uint32_t)
+        );
+
         wgpu::ComputePassDescriptor computePassDesc{};
         computePassDesc.timestampWrites = nullptr;
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass(&computePassDesc);
@@ -145,10 +159,9 @@ void RenderEngine::Render(void* userData)
         pass.SetBindGroup(0, this->computeUploadVoxelPipeline.bindGroup);
 
         // Dispatch size based on upload buffer size, filled by CPU
-        const uint32_t uploadCount = this->voxelManager->pendingUploadCount;
         if (uploadCount > 0)
         {
-            uint32_t dispatchX = (uploadCount + 63) / 64;
+            uint32_t dispatchX = (uploadCount + 127) / 128;
             pass.DispatchWorkgroups(dispatchX, 1, 1);
         }
 
@@ -162,6 +175,7 @@ void RenderEngine::Render(void* userData)
         VoxelParameters voxelParams{};
         voxelParams.pixelToRay = this->camera->PixelToRayMatrix();
         voxelParams.cameraOrigin = this->camera->GetPosition();
+        voxelParams.numToRender = this->voxelManager->lastBrickIndex;
         voxelParams.voxelResolution = MAXIMUM_VOXEL_RESOLUTION;
         voxelParams.time = static_cast<float>(renderInfo.time);
 
@@ -187,7 +201,7 @@ void RenderEngine::Render(void* userData)
         pass.End();
     }
 
-    this->voxelManager->readFeedback(*this->wgpuBundle);
+    this->voxelManager->prepareFeedback(queue, encoder);
 
     // Blit pass
     this->blitVoxelPipeline.AssertConsistent();
@@ -216,6 +230,17 @@ void RenderEngine::Render(void* userData)
 
     wgpu::CommandBuffer commandBuffer = encoder.Finish();
     this->wgpuBundle->GetDevice().GetQueue().Submit(1, &commandBuffer);
+
+    // Wait for all futures
+    wgpu::Future readFeedbackFuture;
+    this->voxelManager->readFeedback(readFeedbackFuture);
+
+    wgpu::Future remapUploadFuture;
+    bool remapRequested = this->voxelManager->remapUploadBuffer(remapUploadFuture);
+
+    this->wgpuBundle->GetInstance().WaitAny(readFeedbackFuture, UINT64_MAX);
+    if (remapRequested)
+        this->wgpuBundle->GetInstance().WaitAny(remapUploadFuture, UINT64_MAX);
 }
 
 //================================//

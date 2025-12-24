@@ -194,7 +194,7 @@ void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrap
     entries[0].visibility = wgpu::ShaderStage::Compute;
     entries[0].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
 
-    // BrickPool, colorPool, BrickGrid
+    // BrickPool, colorPool, uniform with upload count
     entries[1].binding = 1;
     entries[1].visibility = wgpu::ShaderStage::Compute;
     entries[1].buffer.type = wgpu::BufferBindingType::Storage;
@@ -205,7 +205,7 @@ void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrap
 
     entries[3].binding = 3;
     entries[3].visibility = wgpu::ShaderStage::Compute;
-    entries[3].buffer.type = wgpu::BufferBindingType::Storage;
+    entries[3].buffer.type = wgpu::BufferBindingType::Uniform;
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 4;

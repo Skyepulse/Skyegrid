@@ -8,7 +8,7 @@ struct ComputeVoxelParams
 {
     pixelToRay: mat4x4<f32>,
     cameraOrigin: vec3<f32>,
-    _pad0: f32,
+    numToRender: u32,
     voxelResolution: u32,
     time: f32,
     _pad1: vec2<f32>,
@@ -40,7 +40,7 @@ var<storage, read_write> brickGrid: array<atomic<u32>>; // atomic write in order
 var<storage, read> brickPool: array<Brick>;
 // Colors
 @group(0) @binding(4)
-var<storage, read> colorPool: array<u32>; // 512 sized array of packed u32 colors
+var<storage, read> colorPool: array<u32>;
 // Feedback count buffer
 @group(0) @binding(5)
 var<storage, read_write> feedbackCount: atomic<u32>;
@@ -54,12 +54,20 @@ var<storage, read_write> feedbackIndices: array<u32>;
 // Bit layout (example):
 // [31]     : resident flag
 // [30]     : requested flag (GPU feedback)
-// [29:24]  : unused
+// [29]     : unloaded flag (has LOD color)
+// [28:24]  : unused
 // [23:0]   : brick pool index OR packed LOD color
 fn isBrickLoaded(brickIndex: u32) -> bool
 {
     let pointer = atomicLoad(&brickGrid[brickIndex]);
-    return (pointer & 0x80000000u) != 0u;
+    return (pointer & 0x80000000u) != 0u; // Check resident flag at 31st bit
+}
+
+//================================//
+fn isBrickUnloaded(brickIndex: u32) -> bool
+{
+    let pointer = atomicLoad(&brickGrid[brickIndex]);
+    return (pointer & 0x20000000u) != 0u; // Check unloaded flag at 29th bit
 }
 
 //================================//
@@ -93,15 +101,22 @@ fn loadLODColor(worldPos: vec3<f32>) -> vec3<f32>
     let voxelCoord: vec3<u32> = worldToVoxelCoord(worldPos);
     let brickCoord: vec3<u32> = voxelToBrickCoord(voxelCoord);
     let brickIndex: u32 = brickToIndex(brickCoord);
+    
+    return loadLODColorBrickIndex(brickIndex);
+}
+
+//================================//
+fn loadLODColorBrickIndex(brickIndex: u32) -> vec3<f32>
+{
     let pointer = atomicLoad(&brickGrid[brickIndex]);
 
     // The brick is not loaded, we therefore get the LOD color
     let packedLOD = pointer & 0x00FFFFFFu; // LOD color is in [23:0]
 
     // Decode r, g, b
-    let r: f32 = f32((packedLOD >> 16u) & 255u) / 255.0; // red in 16 - 23 bits
+    let r: f32 = f32(packedLOD & 255u) / 255.0; // red in 0-7 bits
     let g: f32 = f32((packedLOD >> 8u) & 255u) / 255.0; // green in 8 - 15 bits
-    let b: f32 = f32(packedLOD & 255u) / 255.0; // blue in 0 - 7 bits
+    let b: f32 = f32((packedLOD >> 16u) & 255u) / 255.0; // blue in 16 - 23 bits
 
     return vec3<f32>(r, g, b);
 }
@@ -122,9 +137,10 @@ fn loadColor(brickSlot: u32, voxelIndex: u32) -> vec3<f32>
     let packedColor = colorPool[start + voxelIndex];
 
     // Decode r, g, b
-    let r: f32 = f32((packedColor >> 16u) & 255u) / 255.0; // red in 16 - 23 bits
+    let r: f32 = f32(packedColor & 255u) / 255.0; // red in 0-7 bits
     let g: f32 = f32((packedColor >> 8u) & 255u) / 255.0; // green in 8 - 15 bits
-    let b: f32 = f32(packedColor & 255u) / 255.0; // blue in 0 - 7 bits
+    let b: f32 = f32((packedColor >> 16u) & 255u) / 255.0; // blue in 16 - 23 bits
+    // the rest is padding
 
     return vec3<f32>(r, g, b);
 }
@@ -142,7 +158,12 @@ fn writeFeedback(brickIndex: u32)
 
     // If not already requested, we write to feedback buffer
     let index = atomicAdd(&feedbackCount, 1u);
-    if (index < MAX_FEEDBACK)
+
+    // we know there are at most N bricks, of 8x8x8 voxels, so also
+    // check we are under max bricks which is 
+    let brickResolution: u32 = params.voxelResolution / 8u;
+    let maxBricks: u32 = brickResolution * brickResolution * brickResolution;
+    if (index < MAX_FEEDBACK && brickIndex < maxBricks)
     {
         feedbackIndices[index] = brickIndex;
     }
@@ -193,6 +214,12 @@ fn localCoordToVoxelIndex(localCoord: vec3<u32>) -> u32
 }
 
 //================================//
+fn brickIndexFromPointer(pointer: u32) -> u32
+{
+    return pointer & 0x00FFFFFFu; // brick index is in [23:0]
+}
+
+//================================//
 @compute @workgroup_size(8, 8, 1)
 fn c(@builtin(global_invocation_id) gid: vec3<u32>) 
 {
@@ -218,7 +245,48 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>)
     var color: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
     //let hit = traverseGrid(rayOrigin, rayDir, &color, &steps);
     
-    color = vec3<f32>(0.5, 0.0, 0.0);
+    // Max num bricks
+    color = vec3<f32>(0.0, 0.5, 0.0);
+    let maxBricks = (params.voxelResolution / 8u) * (params.voxelResolution / 8u) * (params.voxelResolution / 8u);
+    // Produce a unique brick index
+    let linearID = gid.y * size.x + gid.x;
+    if (linearID >= maxBricks)
+    {
+        textureStore(
+            targetTexture,
+            vec2<i32>(i32(gid.x), i32(gid.y)),
+            vec4<f32>(color, 1.0)
+        );
+        return;
+    }
+
+    // check if the brick is loaded, if not get the LOD
+    let brickIndex: u32 = linearID;
+    let brickLoaded: bool = isBrickLoaded(brickIndex);
+    let brickUnloaded: bool = isBrickUnloaded(brickIndex);
+
+    if (brickUnloaded)
+    {
+        color = loadLODColorBrickIndex(brickIndex);
+    }
+    
+    // if unloaded, and our index is less than numToRender, REQUEST IT
+    if (!brickLoaded && (linearID < params.numToRender))
+    {
+        writeFeedback(brickIndex); // this will make it loaded next frame
+    }
+
+    if (brickLoaded)
+    {
+        // get brick slot
+        let pointer = atomicLoad(&brickGrid[brickIndex]);
+        let brickSlot: u32 = brickIndexFromPointer(pointer);
+        
+        let localCoord: vec3<u32> = vec3<u32>(0u, 0u, 0u); // start with first voxel
+        let voxelIndex: u32 = localCoordToVoxelIndex(localCoord);
+        color = loadColor(brickSlot, voxelIndex);
+    }
+
     textureStore(
         targetTexture,
         vec2<i32>(i32(gid.x), i32(gid.y)),

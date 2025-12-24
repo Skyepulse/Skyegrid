@@ -334,7 +334,15 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     this->brickGrid.resize(this->BrickResolution * this->BrickResolution * this->BrickResolution);
     for(int i = 0; i < this->brickGrid.size(); ++i)
     {
-        this->brickGrid[i].pointer = PackLOD({255, 255, 0}); // Yellow: 255 red, 255 green, 0 blue LOD for unloaded bricks
+        // Go From red to green depending on index: 0: pure red, max: pure green
+        ColorRGB brickColor = {
+            uint8_t(255 - (i * 255) / this->brickGrid.size()),
+            uint8_t((i * 255) / this->brickGrid.size()),
+            0,
+            0
+        };
+
+        this->brickGrid[i].pointer = PackLOD(brickColor);
     }
 
     const uint32_t MAX_GPU_BRICKS = this->BrickResolution * this->BrickResolution * this->BrickResolution;

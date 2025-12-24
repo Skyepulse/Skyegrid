@@ -9,7 +9,7 @@ constexpr int MINIMUM_WINDOW_HEIGHT = 240;
 constexpr int INITIAL_WINDOW_WIDTH = 1920;
 constexpr int INITIAL_WINDOW_HEIGHT = 1080;
 
-constexpr int MAXIMUM_VOXEL_RESOLUTION = 512; // So maximum count of voxels is 512^3
+constexpr int MAXIMUM_VOXEL_RESOLUTION = 16; // So maximum count of voxels is 16^3
 
 constexpr size_t COMPUTE_VOXEL_UNIFORM_SIZE = 16;
 

@@ -24,7 +24,7 @@ struct VoxelParameters
 {
     Eigen::Matrix4f pixelToRay;
     Eigen::Vector3f cameraOrigin;
-    float _pad0;
+    uint32_t numToRender;
     uint32_t voxelResolution;
     float time;
     float _pad1[2];

@@ -57,16 +57,14 @@ var<storage, read_write> feedbackIndices: array<u32>;
 // [29]     : unloaded flag (has LOD color)
 // [28:24]  : unused
 // [23:0]   : brick pool index OR packed LOD color
-fn isBrickLoaded(brickIndex: u32) -> bool
+fn isBrickLoaded(pointer: u32) -> bool
 {
-    let pointer = atomicLoad(&brickGrid[brickIndex]);
     return (pointer & 0x80000000u) != 0u; // Check resident flag at 31st bit
 }
 
 //================================//
-fn isBrickUnloaded(brickIndex: u32) -> bool
+fn isBrickUnloaded(pointer: u32) -> bool
 {
-    let pointer = atomicLoad(&brickGrid[brickIndex]);
     return (pointer & 0x20000000u) != 0u; // Check unloaded flag at 29th bit
 }
 
@@ -80,9 +78,8 @@ fn readVoxelData(worldPos: vec3<f32>) -> bool
     let pointer = atomicLoad(&brickGrid[brickIndex]);
 
     // Check if the pointer, points to a valid brick
-    if isBrickLoaded(brickIndex) == false
+    if isBrickLoaded(pointer) == false
     {
-        writeFeedback(brickIndex);
         return false;
     }
 
@@ -94,8 +91,7 @@ fn readVoxelData(worldPos: vec3<f32>) -> bool
 }
 
 //================================//
-// We call this in case we get false in readVoxelData (brick not loaded)
-// in the case this color is the empty one, we suppose it is an empty brick
+// We call this in case we get an unloaded brick
 fn loadLODColor(worldPos: vec3<f32>) -> vec3<f32>
 {
     let voxelCoord: vec3<u32> = worldToVoxelCoord(worldPos);
@@ -190,6 +186,14 @@ fn voxelToBrickCoord(voxelCoord: vec3<u32>) -> vec3<u32>
 }
 
 //================================//
+fn worldToBrickIndex(position: vec3<f32>) -> u32
+{
+    let voxelCoord: vec3<u32> = worldToVoxelCoord(position);
+    let brickCoord: vec3<u32> = voxelToBrickCoord(voxelCoord);
+    return brickToIndex(brickCoord);
+}
+
+//================================//
 fn brickToIndex(brickCoord: vec3<u32>) -> u32
 {
     let gridResolution: u32 = params.voxelResolution / 8u;
@@ -214,7 +218,7 @@ fn localCoordToVoxelIndex(localCoord: vec3<u32>) -> u32
 }
 
 //================================//
-fn brickIndexFromPointer(pointer: u32) -> u32
+fn brickSlotFromPointer(pointer: u32) -> u32
 {
     return pointer & 0x00FFFFFFu; // brick index is in [23:0]
 }
@@ -243,53 +247,311 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>)
 
     var steps: i32 = 0;
     var color: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
-    //let hit = traverseGrid(rayOrigin, rayDir, &color, &steps);
-    
-    // Max num bricks
-    color = vec3<f32>(0.0, 0.5, 0.0);
-    let maxBricks = (params.voxelResolution / 8u) * (params.voxelResolution / 8u) * (params.voxelResolution / 8u);
-    // Produce a unique brick index
-    let linearID = gid.y * size.x + gid.x;
-    if (linearID >= maxBricks)
-    {
-        textureStore(
-            targetTexture,
-            vec2<i32>(i32(gid.x), i32(gid.y)),
-            vec4<f32>(color, 1.0)
-        );
-        return;
-    }
-
-    // check if the brick is loaded, if not get the LOD
-    let brickIndex: u32 = linearID;
-    let brickLoaded: bool = isBrickLoaded(brickIndex);
-    let brickUnloaded: bool = isBrickUnloaded(brickIndex);
-
-    if (brickUnloaded)
-    {
-        color = loadLODColorBrickIndex(brickIndex);
-    }
-    
-    // if unloaded, and our index is less than numToRender, REQUEST IT
-    if (!brickLoaded && (linearID < params.numToRender))
-    {
-        writeFeedback(brickIndex); // this will make it loaded next frame
-    }
-
-    if (brickLoaded)
-    {
-        // get brick slot
-        let pointer = atomicLoad(&brickGrid[brickIndex]);
-        let brickSlot: u32 = brickIndexFromPointer(pointer);
-        
-        let localCoord: vec3<u32> = vec3<u32>(0u, 0u, 0u); // start with first voxel
-        let voxelIndex: u32 = localCoordToVoxelIndex(localCoord);
-        color = loadColor(brickSlot, voxelIndex);
-    }
+    let hit = traverseGrid(rayOrigin, rayDir, &color, &steps);
+    //let hit = traverseDEBUG(rayOrigin, rayDir, &color, &steps);
 
     textureStore(
         targetTexture,
         vec2<i32>(i32(gid.x), i32(gid.y)),
         vec4<f32>(color, 1.0)
     );
+}
+
+//================================//
+fn traverseGrid(rayOrigin: vec3<f32>, rayDir: vec3<f32>, color: ptr<function, vec3<f32>>, steps: ptr<function, i32>) -> bool
+{
+    // Ray sign and inverse
+    let rayDirInv:          vec3<f32>   = 1.0 / rayDir;
+    let signDir:            vec3<f32>   = sign(rayDirInv);
+    let clampedRayDirInv:   vec3<f32>   = clamp(rayDirInv, vec3<f32>(-1e8), vec3<f32>(1e8)); // avoid infinities
+
+    let stepBrick:          vec3<i32>   = vec3<i32>(signDir);
+    let brickSize:          f32         = 8.0;
+
+    // Try to find entry and out of slab
+    let t1:     vec3<f32>   = -rayOrigin * rayDirInv;
+    let t2:     vec3<f32>   = (vec3<f32>(f32(params.voxelResolution)) - rayOrigin) * rayDirInv;
+
+    let tmin:   vec3<f32>   = min(t1, t2);
+    let tmax:   vec3<f32>   = max(t1, t2);
+    var tNear:  f32         = 0.0;
+    var tFar:   f32         = 1e30;
+
+    for (var i: i32 = 0; i < 3; i = i + 1) 
+    {
+        tNear = max(tNear, tmin[i]);
+        tFar = min(tFar, tmax[i]);
+    }
+
+    // Return early if we are sure to miss the slab
+    if (tNear > tFar) 
+    {
+        return false;
+    }
+
+    // FIX: Add small epsilon to ensure we're inside the grid
+    let epsilon: f32 = 0.0001;
+    tNear = tNear + epsilon;
+
+    // start at entry point t = tNear
+    let entryPoint:         vec3<f32> = rayOrigin + rayDir * tNear;
+    var brickCoord:         vec3<i32> = vec3<i32>(floor(entryPoint / brickSize)); // which brick we are in
+
+    // Clamp brick coord to valid range
+    brickCoord = clamp(brickCoord, vec3<i32>(0), vec3<i32>(i32(params.voxelResolution) / 8 - 1));
+
+    // (Brickcoord + 0.5 * (signDir + 1))) * 8 gives us the coordinate of the next brick boundary in the ray direction
+    let nextBrickBoundary:  vec3<f32> = (vec3<f32>(brickCoord) + 0.5 * (signDir + 1.0)) * brickSize;
+
+    var tBrick:             vec3<f32> = (nextBrickBoundary - rayOrigin) * rayDirInv; // parametric distance to next brick boundary
+    let deltaBrick:         vec3<f32> = abs(clampedRayDirInv) * brickSize;
+    let brickResolution:    i32       = i32(params.voxelResolution) / 8;
+
+    // INIT LOOP
+    while(true)
+    {
+        (*steps) = (*steps) + 1;
+
+        // Check if we are outside the grid
+        if (brickCoord.x < 0 || brickCoord.y < 0 || brickCoord.z < 0 ||
+            brickCoord.x >= brickResolution ||
+            brickCoord.y >= brickResolution ||
+            brickCoord.z >= brickResolution)
+        {
+            break; // outside grid, return without setting color
+        }
+
+        let brickIndex:     u32 = brickToIndex(vec3<u32>(brickCoord));
+        let brickPointer:   u32 = atomicLoad(&brickGrid[brickIndex]);
+        let brickSlot:      u32 = brickSlotFromPointer(brickPointer);
+
+        let brickLoaded:    bool = isBrickLoaded(brickPointer);
+        let brickUnloaded:  bool = isBrickUnloaded(brickPointer);
+        let brickEmpty:     bool = (!brickLoaded && !brickUnloaded);
+
+        if (!brickEmpty) // Not empty
+        {
+            if (brickUnloaded) // easy, load LOD color
+            {
+                (*color) = loadLODColorBrickIndex(brickIndex);
+                return true;
+            }
+            else if (brickLoaded) // full brick, do voxel traversal
+            {
+                let brickMin: vec3<f32> = vec3<f32>(brickCoord) * brickSize;
+                let brickMax: vec3<f32> = brickMin + vec3<f32>(brickSize);
+
+                // local slab
+                let t1_local: vec3<f32> = (brickMin - rayOrigin) * clampedRayDirInv;
+                let t2_local: vec3<f32> = (brickMax - rayOrigin) * clampedRayDirInv;
+
+                let tmin_local: vec3<f32> = min(t1_local, t2_local);
+                let tmax_local: vec3<f32> = max(t1_local, t2_local);
+
+                let tEnter = max(max(tmin_local.x, tmin_local.y), tmin_local.z);
+                let tExit  = min(min(tmax_local.x, tmax_local.y), tmax_local.z);
+
+                if (tEnter <= tExit)
+                {
+                    let hit = traverseBrick(rayOrigin, rayDir, tEnter, tExit, brickCoord, brickPointer, brickSlot, color);
+                    if(hit) // if not we just continue
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Advance
+        if (tBrick.x < tBrick.y) 
+        {
+            if (tBrick.x < tBrick.z) 
+            {
+                brickCoord.x    = brickCoord.x + stepBrick.x;
+                tBrick.x        = tBrick.x + deltaBrick.x;
+            } 
+            else 
+            {
+                brickCoord.z    = brickCoord.z + stepBrick.z;
+                tBrick.z        = tBrick.z + deltaBrick.z;
+            }
+        } 
+        else 
+        {
+            if (tBrick.y < tBrick.z) 
+            {
+                brickCoord.y    = brickCoord.y + stepBrick.y;
+                tBrick.y        = tBrick.y + deltaBrick.y;
+            } 
+            else 
+            {
+                brickCoord.z    = brickCoord.z + stepBrick.z;
+                tBrick.z        = tBrick.z + deltaBrick.z;
+            }
+        }
+    }
+
+    return false;
+}
+
+//================================//
+fn traverseBrick(rayOrigin: vec3<f32>, rayDir: vec3<f32>, tEnter: f32, tExit: f32, brickCoord: vec3<i32>, brickPointer: u32, brickSlot: u32, color: ptr<function, vec3<f32>>) -> bool
+{
+    let brickSize:          f32         = 8.0;
+    let rayDirInv:          vec3<f32>   = 1.0 / rayDir;
+    let signDir:            vec3<f32>   = sign(rayDirInv);
+    let clampedRayDirInv:   vec3<f32>   = clamp(rayDirInv, vec3<f32>(-1e8), vec3<f32>(1e8)); // avoid infinities
+
+    let brickMin:           vec3<f32>   = vec3<f32>(brickCoord) * brickSize;
+
+    let entryPoint:         vec3<f32>   = rayOrigin + rayDir * tEnter;
+
+    var voxel:              vec3<i32>   = vec3<i32>(clamp(floor(entryPoint - brickMin), vec3<f32>(0.0), vec3<f32>(7.0))); // local voxel coord in brick, known to be in [0, 7]^3
+    let nextVoxelBoundary:  vec3<f32>   = (vec3<f32>(voxel) + 0.5 * (signDir + 1.0)); // next voxel boundary in ray direction
+
+    var tVoxel:             vec3<f32>   = (nextVoxelBoundary + vec3<f32>(brickMin) - entryPoint) * rayDirInv;
+    let deltaVoxel:         vec3<f32>   = abs(clampedRayDirInv);
+
+    var tCurrent:           f32         = tEnter;  
+
+    // DDA loop
+    while(true)
+    {
+        if (voxel.x >= 8 || voxel.y >= 8 || voxel.z >= 8
+            || voxel.x < 0 || voxel.y < 0 || voxel.z < 0)
+        {
+            break;
+        }
+
+        let voxelIndex: u32 = localCoordToVoxelIndex(vec3<u32>(voxel));
+
+        // is it occupied:
+        let hit = isVoxelSet(brickPool[brickSlot], vec3<u32>(voxel).x, vec3<u32>(voxel).y, vec3<u32>(voxel).z);
+        if (hit)
+        {
+            // load color
+            (*color) = loadColor(brickSlot, voxelIndex);
+            return true;
+        }
+
+        // Advance
+        if (tVoxel.x < tVoxel.y) 
+        {
+            if (tVoxel.x < tVoxel.z) 
+            {
+                voxel.x     = voxel.x + i32(signDir.x);
+                tCurrent    = tVoxel.x;
+                tVoxel.x    = tVoxel.x + deltaVoxel.x;
+            } 
+            else 
+            {
+                voxel.z     = voxel.z + i32(signDir.z);
+                tCurrent    = tVoxel.z;
+                tVoxel.z    = tVoxel.z + deltaVoxel.z;
+            }
+        } 
+        else 
+        {
+            if (tVoxel.y < tVoxel.z) 
+            {
+                voxel.y     = voxel.y + i32(signDir.y);
+                tCurrent    = tVoxel.y;
+                tVoxel.y    = tVoxel.y + deltaVoxel.y;
+            } 
+            else 
+            {
+                voxel.z     = voxel.z + i32(signDir.z);
+                tCurrent    = tVoxel.z;
+                tVoxel.z    = tVoxel.z + deltaVoxel.z;
+            }
+        }
+
+        if (tCurrent > tExit)
+        {
+            break;
+        }
+    }
+
+    return false;
+}
+
+//================================//
+fn traverseDEBUG(rayOrigin: vec3<f32>, rayDir: vec3<f32>, color: ptr<function, vec3<f32>>, steps: ptr<function, i32>) -> bool
+{
+    // Ray sign and inverse
+    let rayDirInv: vec3<f32> = 1.0 / rayDir;
+    let signDir: vec3<f32> = sign(rayDirInv);
+    let clampedRayDirInv: vec3<f32> = clamp(rayDirInv, vec3<f32>(-1e8), vec3<f32>(1e8));
+
+    // Try to find entry and out of slab
+    let t1: vec3<f32> = -rayOrigin * rayDirInv;
+    let t2: vec3<f32> = (vec3<f32>(f32(params.voxelResolution)) - rayOrigin) * rayDirInv;
+
+    let tmin: vec3<f32> = min(t1, t2);
+    let tmax: vec3<f32> = max(t1, t2);
+
+    var tNear: f32 = 0.0;
+    var tFar: f32 = 1e30;
+    for (var i: i32 = 0; i < 3; i = i + 1) 
+    {
+        tNear = max(tNear, tmin[i]);
+        tFar = min(tFar, tmax[i]);
+    }
+
+    // Meaning we don't hit the slab
+    if (tNear > tFar) 
+    {
+        return false;
+    }
+
+    // Find the axis we hit the slab from AABB
+    // 0 -> X, 1 -> Y, 2 -> Z
+    var slabAxis: i32 = 0;
+    if (tmin.x < tmin.y) 
+    {
+        if (tmin.x < tmin.z) 
+        {
+            slabAxis = 0;
+        } 
+        else 
+        {
+            slabAxis = 2;
+        }
+    }
+    else 
+    {
+        if (tmin.y < tmin.z) 
+        {
+            slabAxis = 1;
+        } 
+        else 
+        {
+            slabAxis = 2;
+        }
+    }
+
+    // start at entry point t = tNear
+    let entryPoint: vec3<f32> = rayOrigin + rayDir * tNear;
+    var voxelCoord: vec3<u32> = vec3<u32>(clamp(floor(entryPoint), vec3<f32>(0.0), vec3<f32>(f32(params.voxelResolution) - 1.0)));
+
+    // (coord + 0.5 * (signDir + 1))) gives us the coordinate of the next voxel boundary in the ray direction
+    let nextVoxelBoundary: vec3<f32> = (vec3<f32>(voxelCoord) + 0.5 * (signDir + 1.0));
+    var t: vec3<f32> = (nextVoxelBoundary - entryPoint) * rayDirInv; // parametric distance to next voxel boundary
+    let step: vec3<i32> = vec3<i32>(signDir);
+    let delta: vec3<f32> = rayDirInv * signDir;
+
+    var mask: vec3<f32> = vec3<f32>(0.0);
+    mask[slabAxis] = 1.0;
+
+    // t[mask] holds the exact distance we hit the voxel boundary
+    // We subtract delta[mask] to get the entry point into the voxel
+    var t_hit: f32 = dot(t, mask) - dot(delta, mask);
+
+    let denom = f32(params.voxelResolution - 1u);
+    (*color) = vec3<f32>(
+        f32(voxelCoord.x),
+        f32(voxelCoord.y),
+        f32(voxelCoord.z)
+    ) / denom;
+    return true;
 }

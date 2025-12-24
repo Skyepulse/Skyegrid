@@ -60,7 +60,7 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
 
     // WE SHOULD ENFORCE voxelResolution % 8 == 0
     assert(MAXIMUM_VOXEL_RESOLUTION % 8 == 0);
-    assert(MAXIMUM_VOXEL_RESOLUTION % 64 == 0);
+    // assert(MAXIMUM_VOXEL_RESOLUTION % 64 == 0);
 
     // Number of textures: 1 (the output voxel texture)
     pipelineWrapper.textureSizes.resize(1);

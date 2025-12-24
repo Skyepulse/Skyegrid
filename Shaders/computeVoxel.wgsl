@@ -8,7 +8,7 @@ struct ComputeVoxelParams
 {
     pixelToRay: mat4x4<f32>,
     cameraOrigin: vec3<f32>,
-    numToRender: u32,
+    _pad0: u32,
     voxelResolution: u32,
     time: f32,
     _pad1: vec2<f32>,

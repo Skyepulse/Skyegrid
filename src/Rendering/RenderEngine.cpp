@@ -124,9 +124,26 @@ void RenderEngine::Render(void* userData)
     }
 
     this->voxelManager->startOfFrame();
-    this->voxelManager->lastBrickIndex += 50;
-    if (this->voxelManager->lastBrickIndex > this->voxelManager->brickMaps.size())
-        this->voxelManager->lastBrickIndex = this->voxelManager->brickMaps.size(); // Cannot render more than we have
+    const int num_voxels_max = MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION;
+    if (this->voxelManager->lastBrickIndex >= num_voxels_max)
+        this->voxelManager->lastBrickIndex = 0;
+
+    if (this->voxelManager->lastBrickIndex < num_voxels_max)
+    {
+        int x = (this->voxelManager->lastBrickIndex % MAXIMUM_VOXEL_RESOLUTION);;
+        int y = (this->voxelManager->lastBrickIndex / MAXIMUM_VOXEL_RESOLUTION) % MAXIMUM_VOXEL_RESOLUTION;;
+        int z = (this->voxelManager->lastBrickIndex / (MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION)) % MAXIMUM_VOXEL_RESOLUTION;
+        // Color rgb, from red to green depending on index pure red at 0,0,0 and pure green at max,max,max
+        ColorRGB color = {
+            uint8_t(255 - (this->voxelManager->lastBrickIndex * 255) / num_voxels_max),
+            uint8_t((this->voxelManager->lastBrickIndex * 255) / num_voxels_max),
+            0,
+            0
+        };
+        this->voxelManager->setVoxel(x, y, z, true, color);
+    }
+
+    this->voxelManager->lastBrickIndex += 1;
 
     wgpu::TextureView swapchainView = currentTexture.texture.CreateView();
 
@@ -175,7 +192,6 @@ void RenderEngine::Render(void* userData)
         VoxelParameters voxelParams{};
         voxelParams.pixelToRay = this->camera->PixelToRayMatrix();
         voxelParams.cameraOrigin = this->camera->GetPosition();
-        voxelParams.numToRender = this->voxelManager->lastBrickIndex;
         voxelParams.voxelResolution = MAXIMUM_VOXEL_RESOLUTION;
         voxelParams.time = static_cast<float>(renderInfo.time);
 

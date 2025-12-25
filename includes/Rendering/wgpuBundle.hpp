@@ -35,6 +35,8 @@ public:
 
         return format;
     }
+
+    void SafeCreateBuffer(const wgpu::BufferDescriptor* descriptor, wgpu::Buffer& outBuffer);
     
 private:
     void ComputeLimits();

@@ -72,6 +72,7 @@ public:
         {
             throw std::runtime_error("[VoxelManager] Voxel resolution too high, exceeds maximum number of bricks that can be addressed.");
         }
+        std::cout << "[VoxelManager] Created with voxel resolution " << resolution << " (" << resolution * resolution * resolution << " total voxels)." << std::endl;
     };
     ~VoxelManager()
     {
@@ -120,7 +121,7 @@ public:
     std::vector<uint32_t> dirtyBrickIndices;
 
     uint32_t pendingUploadCount = 0;
-    uint32_t lastBrickIndex = 0; // DEBUG
+    uint64_t lastBrickIndex = 0; // DEBUG
 
 private:
     bool requestRemap = false;

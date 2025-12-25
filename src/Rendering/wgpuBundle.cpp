@@ -60,8 +60,12 @@ void WgpuBundle::InitializeInstance()
 
     wgpu::AdapterInfo info;
     adapter.GetInfo(&info);
+
     std::cout << "[wgpuBundle][Init] Using adapter: " << info.description << std::endl;
     std::cout << "[wgpuBundle][Init] Using device: " << info.device << std::endl;
+    std::cout << "[wgpuBundle][Init] Device limits: " << std::endl;
+    std::cout << "  - Max buffer size: " << this->limits.maxBufferSize << std::endl;
+    std::cout << "  - Max storage buffer binding size: " << this->limits.maxStorageBufferBindingSize << std::endl;
     std::cout << "[wgpuBundle][Init] Backend: " << static_cast<uint32_t>(info.backendType) << std::endl;
 }
 
@@ -93,17 +97,14 @@ void WgpuBundle::ComputeLimits()
 {
     this->limits.maxStorageTexturesPerShaderStage =
         std::max(this->limits.maxStorageTexturesPerShaderStage, 2u);
+
     this->limits.maxTextureDimension2D =
         std::max(this->limits.maxTextureDimension2D,
                  static_cast<uint32_t>(
                      std::max(MAXIMUM_WINDOW_WIDTH, MAXIMUM_WINDOW_HEIGHT)));
-    this->limits.maxTextureDimension3D =
-        std::max(this->limits.maxTextureDimension3D,
-                 static_cast<uint32_t>(MAXIMUM_VOXEL_RESOLUTION / 4));
 
     this->limits.maxUniformBuffersPerShaderStage =
         std::max(this->limits.maxUniformBuffersPerShaderStage, 1u);
-
     this->limits.maxUniformBufferBindingSize =
         std::max(static_cast<uint32_t>(this->limits.maxUniformBufferBindingSize), 256u);
 
@@ -115,7 +116,7 @@ void WgpuBundle::ComputeLimits()
         std::max(this->limits.maxComputeWorkgroupSizeZ, 1u);
 
     this->limits.maxComputeInvocationsPerWorkgroup =
-        std::max(this->limits.maxComputeInvocationsPerWorkgroup, 64u);
+        std::max(this->limits.maxComputeInvocationsPerWorkgroup, 128u);
 }
 
 //================================//
@@ -127,4 +128,23 @@ void WgpuBundle::Resize(int newWidth, int newHeight)
 
     std::cout << "[wgpuBundle] Window resized to " << newWidth << "x" << newHeight << std::endl;
     this->resizeFlag = true;
+}
+
+//================================//
+void WgpuBundle::SafeCreateBuffer(const wgpu::BufferDescriptor* descriptor, wgpu::Buffer& outBuffer)
+{
+    const uint64_t bufferRequestedSize = descriptor->size;
+    if (bufferRequestedSize > this->limits.maxBufferSize)
+    {
+        std::cout << "[WgpuBundle] Requested buffer size (" << bufferRequestedSize
+                    << ") exceeds device maxBufferSize limit (" << this->limits.maxBufferSize << ")." << std::endl;
+        throw std::runtime_error("[WgpuBundle] Requested buffer size exceeds device limits.");
+    }
+
+    outBuffer = this->device.CreateBuffer(descriptor);
+    if (!outBuffer)
+    {
+        std::cout << "[WgpuBundle] Failed to create buffer of size " << bufferRequestedSize << "." << std::endl;
+        throw std::runtime_error("[WgpuBundle] Failed to create buffer.");
+    }
 }

@@ -126,7 +126,7 @@ void RenderEngine::Render(void* userData)
     this->voxelManager->startOfFrame();
     const int num_voxels_max = MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION;
     if (this->voxelManager->lastBrickIndex >= num_voxels_max)
-        this->voxelManager->lastBrickIndex = 0;
+        this->voxelManager->lastBrickIndex = num_voxels_max;
 
     if (this->voxelManager->lastBrickIndex < num_voxels_max)
     {

@@ -373,7 +373,7 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
     desc.label = "Brick Grid Buffer";
     desc.mappedAtCreation = false;
-    this->brickGridBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->brickGridBuffer);
     queue.WriteBuffer(brickGridBuffer, 0, brickGrid.data(), desc.size);
 
     // [2] BRICK POOL BUFFER
@@ -382,16 +382,16 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
     desc.label = "Brick Pool Buffer";
     desc.mappedAtCreation = false;
-    this->brickPoolBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->brickPoolBuffer);
 
     // [3] COLOR POOL BUFFER
     // 512 voxels * 3 bytes per voxel
-    const uint32_t colorPerBrickSize = 2048; // for alignment
-    desc.size = MAX_GPU_BRICKS * colorPerBrickSize;
+    const uint64_t colorPerBrickSize = 2048; // for alignment
+    desc.size = static_cast<uint64_t>(MAX_GPU_BRICKS) * colorPerBrickSize;
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
     desc.label = "Color Pool Buffer";
     desc.mappedAtCreation = false;
-    this->colorPoolBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->colorPoolBuffer);
 
     // [4] FEEDBACK BUFFERS
     // feedbackCount init is a single uint32_t set to 0
@@ -400,14 +400,14 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
     desc.label = "Feedback Count Buffer (GPU)";
     desc.mappedAtCreation = false;
-    this->feedbackCountBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackCountBuffer);
 
     // Reset buffer for feedback count
     desc.size = sizeof(uint32_t);
     desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
     desc.mappedAtCreation = true; // So we can initialize it to 0 right away
     desc.label = "Feedback Count Reset Buffer (RESET)";
-    this->feedbackCountRESET = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackCountRESET);
     memcpy(feedbackCountRESET.GetMappedRange(), &feedbackCountInit, sizeof(uint32_t));
     feedbackCountRESET.Unmap();
 
@@ -416,35 +416,35 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc;
     desc.label = "Feedback Indices Buffer (GPU)";
     desc.mappedAtCreation = false;
-    this->feedbackIndicesBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackIndicesBuffer);
 
     // CPU feedback indices AND count buffer
     desc.size = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t);
     desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
     desc.label = "Feedback Buffer (indices AND count) (CPU)";
     desc.mappedAtCreation = false;
-    this->CPUfeedbackBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->CPUfeedbackBuffer);
 
     // Upload buffer initialization
     desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
     desc.label = "Upload Buffer (GPU)";
     desc.mappedAtCreation = false;
-    this->uploadBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->uploadBuffer);
 
     // CPU upload buffer (one, then maybe we create more)
     desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
     desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
     desc.label = "Upload Buffer (CPU)";
     desc.mappedAtCreation = true; // So we can write to it right away
-    this->CPUuploadBuffer = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->CPUuploadBuffer);
 
     // Upload count uniform buffer
     desc.size = sizeof(uint32_t);
     desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
     desc.label = "Upload Count Uniform Buffer";
     desc.mappedAtCreation = false;
-    this->uploadCountUniform = wgpuBundle.GetDevice().CreateBuffer(&desc);
+    wgpuBundle.SafeCreateBuffer(&desc, this->uploadCountUniform);
 }
 
 //================================//

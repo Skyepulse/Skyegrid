@@ -31,7 +31,7 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     // Compute pipeline bind group
     // Bind Group
     this->computeVoxelPipeline.bindGroup = nullptr;
-    std::vector<wgpu::BindGroupEntry> entries(7);
+    std::vector<wgpu::BindGroupEntry> entries(9);
 
     entries[0].binding = 0;
     entries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
@@ -53,23 +53,26 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     entries[3].offset = 0;
     entries[3].size = this->voxelManager->brickPoolBuffer.GetSize();
 
-    // Color pool
-    entries[4].binding = 4;
-    entries[4].buffer = this->voxelManager->colorPoolBuffer;
-    entries[4].offset = 0;
-    entries[4].size = this->voxelManager->colorPoolBuffer.GetSize();
-
     // Feedback buffer (Count)
-    entries[5].binding = 5;
-    entries[5].buffer = this->voxelManager->feedbackCountBuffer;
-    entries[5].offset = 0;
-    entries[5].size = this->voxelManager->feedbackCountBuffer.GetSize();
+    entries[4].binding = 4;
+    entries[4].buffer = this->voxelManager->feedbackCountBuffer;
+    entries[4].offset = 0;
+    entries[4].size = this->voxelManager->feedbackCountBuffer.GetSize();
 
     // Feedback buffer (Indices)
-    entries[6].binding = 6;
-    entries[6].buffer = this->voxelManager->feedbackIndicesBuffer;
-    entries[6].offset = 0;
-    entries[6].size = this->voxelManager->feedbackIndicesBuffer.GetSize();
+    entries[5].binding = 5;
+    entries[5].buffer = this->voxelManager->feedbackIndicesBuffer;
+    entries[5].offset = 0;
+    entries[5].size = this->voxelManager->feedbackIndicesBuffer.GetSize();
+
+    // Color pool
+    for (int i = 0; i < MAX_COLOR_POOLS; ++i)
+    {
+        entries[6 + i].binding = 6 + i;
+        entries[6 + i].buffer = this->voxelManager->colorPoolBuffers[i];
+        entries[6 + i].offset = 0;
+        entries[6 + i].size = this->voxelManager->colorPoolBuffers[i].GetSize();
+    }
 
     wgpu::BindGroupDescriptor bindGroupDesc{};
     bindGroupDesc.layout = this->computeVoxelPipeline.bindGroupLayout;
@@ -124,26 +127,6 @@ void RenderEngine::Render(void* userData)
     }
 
     this->voxelManager->startOfFrame();
-    const int num_voxels_max = MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION;
-    if (this->voxelManager->lastBrickIndex >= num_voxels_max)
-        this->voxelManager->lastBrickIndex = num_voxels_max;
-
-    if (this->voxelManager->lastBrickIndex < num_voxels_max)
-    {
-        int x = (this->voxelManager->lastBrickIndex % MAXIMUM_VOXEL_RESOLUTION);;
-        int y = (this->voxelManager->lastBrickIndex / MAXIMUM_VOXEL_RESOLUTION) % MAXIMUM_VOXEL_RESOLUTION;;
-        int z = (this->voxelManager->lastBrickIndex / (MAXIMUM_VOXEL_RESOLUTION * MAXIMUM_VOXEL_RESOLUTION)) % MAXIMUM_VOXEL_RESOLUTION;
-        // Color rgb, from red to green depending on index pure red at 0,0,0 and pure green at max,max,max
-        ColorRGB color = {
-            uint8_t(255 - (this->voxelManager->lastBrickIndex * 255) / num_voxels_max),
-            uint8_t((this->voxelManager->lastBrickIndex * 255) / num_voxels_max),
-            0,
-            0
-        };
-        this->voxelManager->setVoxel(x, y, z, true, color);
-    }
-
-    this->voxelManager->lastBrickIndex += 1;
 
     wgpu::TextureView swapchainView = currentTexture.texture.CreateView();
 
@@ -159,12 +142,16 @@ void RenderEngine::Render(void* userData)
     const uint32_t uploadCount = this->voxelManager->pendingUploadCount;
     this->computeUploadVoxelPipeline.AssertConsistent();
     {
+        UploadUniform uploadUniform{};
+        uploadUniform.uploadCount = uploadCount;
+        uploadUniform.maxColorBufferSize = this->voxelManager->maxColorBufferSize;
+
         // Write uniform
         queue.WriteBuffer(
             this->voxelManager->uploadCountUniform,
             0,
-            &uploadCount,
-            sizeof(uint32_t)
+            &uploadUniform,
+            sizeof(UploadUniform)
         );
 
         wgpu::ComputePassDescriptor computePassDesc{};
@@ -192,6 +179,7 @@ void RenderEngine::Render(void* userData)
         VoxelParameters voxelParams{};
         voxelParams.pixelToRay = this->camera->PixelToRayMatrix();
         voxelParams.cameraOrigin = this->camera->GetPosition();
+        voxelParams.maxColorBufferSize = this->voxelManager->maxColorBufferSize;
         voxelParams.voxelResolution = MAXIMUM_VOXEL_RESOLUTION;
         voxelParams.time = static_cast<float>(renderInfo.time);
 

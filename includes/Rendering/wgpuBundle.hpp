@@ -26,6 +26,7 @@ public:
     wgpu::Device& GetDevice() { return this->device; }
     wgpu::Surface& GetSurface() { return this->surface; }
     wgpu::TextureFormat& GetSwapchainFormat() { return this->swapchainFormat; }
+    wgpu::Limits& GetLimits() { return this->limits; }
 
     WindowFormat GetWindowFormat()
     {

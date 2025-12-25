@@ -8,7 +8,7 @@ struct ComputeVoxelParams
 {
     pixelToRay: mat4x4<f32>,
     cameraOrigin: vec3<f32>,
-    _pad0: u32,
+    maxColorBufferSize: u32,
     voxelResolution: u32,
     time: f32,
     _pad1: vec2<f32>,
@@ -38,15 +38,20 @@ var<storage, read_write> brickGrid: array<atomic<u32>>; // atomic write in order
 // Brick pool
 @group(0) @binding(3)
 var<storage, read> brickPool: array<Brick>;
-// Colors
-@group(0) @binding(4)
-var<storage, read> colorPool: array<u32>;
 // Feedback count buffer
-@group(0) @binding(5)
+@group(0) @binding(4)
 var<storage, read_write> feedbackCount: atomic<u32>;
 // Feedback indices buffer
-@group(0) @binding(6)
+@group(0) @binding(5)
 var<storage, read_write> feedbackIndices: array<u32>;
+
+// Colors (max 3 buffers)
+@group(0) @binding(6)
+var<storage, read> colorPool: array<u32>;
+@group(0) @binding(7)
+var<storage, read> colorPool2: array<u32>;
+@group(0) @binding(8)
+var<storage, read> colorPool3: array<u32>;
 
 //================================//
 //           HELPERS              //
@@ -127,10 +132,25 @@ fn isVoxelSet(brick: Brick, x: u32, y: u32, z: u32) -> bool
 }
 
 //================================//
+fn readColorFromPool(globalOffset: u32) -> u32
+{
+    let bufferIdx   = globalOffset / params.maxColorBufferSize;
+    let localOffset = globalOffset % params.maxColorBufferSize;
+
+    switch (bufferIdx)
+    {
+        case 0u: { return colorPool[localOffset]; }
+        case 1u: { return colorPool2[localOffset]; }
+        case 2u: { return colorPool3[localOffset]; }
+        default: { return 0u; } // out of bounds, should never happen
+    }
+}
+
+//================================//
 fn loadColor(brickSlot: u32, voxelIndex: u32) -> vec3<f32>
 {
-    let start = brickSlot * 512u; // We know each brick in the color pool is represented by 512u
-    let packedColor = colorPool[start + voxelIndex];
+    let globalOffset: u32 = brickSlot * 512u + voxelIndex;  
+    let packedColor: u32 = readColorFromPool(globalOffset);
 
     // Decode r, g, b
     let r: f32 = f32(packedColor & 255u) / 255.0; // red in 0-7 bits

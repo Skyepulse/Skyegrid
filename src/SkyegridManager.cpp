@@ -112,14 +112,14 @@ void SkyegridManager::ProcessEvents(float deltaTime)
     Camera* camera = this->renderEngine->GetCamera();
 
     // Move Speed based on voxel grid size
-    float r = static_cast<float>(MAXIMUM_VOXEL_RESOLUTION);
+    float r = static_cast<float>(MAXIMUM_VOXEL_RESOLUTION) * 1.8f;
     float moveSpeed = movementSpeed * r / 100.0f;
 
     // If shift is held, increase speed
     if (glfwGetKey(this->window.get(), GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
         glfwGetKey(this->window.get(), GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
     {
-        moveSpeed *= 3.0f;
+        moveSpeed *= 6.0f;
     }
 
     Eigen::Vector3f rotationDelta(0.0f, 0.0f, 0.0f);
@@ -137,6 +137,11 @@ void SkyegridManager::ProcessEvents(float deltaTime)
         movementDelta.x() -= moveSpeed * deltaTime * 60.0f;
     if (glfwGetKey(this->window.get(), GLFW_KEY_D) == GLFW_PRESS)
         movementDelta.x() += moveSpeed * deltaTime * 60.0f;
+    //Z, x for up and down
+    if (glfwGetKey(this->window.get(), GLFW_KEY_Z) == GLFW_PRESS)
+        movementDelta.y() += moveSpeed * deltaTime * 60.0f;
+    if (glfwGetKey(this->window.get(), GLFW_KEY_X) == GLFW_PRESS)
+        movementDelta.y() -= moveSpeed * deltaTime * 60.0f;
     
     camera->Rotate(rotationDelta);
     camera->Move(movementDelta);

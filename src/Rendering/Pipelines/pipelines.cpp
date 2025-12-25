@@ -19,6 +19,7 @@ void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pi
 
     wgpu::ShaderModuleDescriptor shaderModuleDesc{};
     shaderModuleDesc.nextInChain = &wgsl;
+    shaderModuleDesc.label = "DebugShaderModule";
 
     pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
     if (!pipelineWrapper.shaderModule)
@@ -54,7 +55,7 @@ void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pi
 }
 
 //================================//
-void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
+void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper, int numColorBuffers)
 {
     pipelineWrapper.isCompute = true;
 
@@ -84,6 +85,7 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
 
     wgpu::ShaderModuleDescriptor shaderModuleDesc{};
     shaderModuleDesc.nextInChain = &wgsl;
+    shaderModuleDesc.label = "ComputeVoxelShaderModule";
 
     pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
 
@@ -100,7 +102,7 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     pipelineWrapper.associatedUniforms[0] = wgpuBundle.GetDevice().CreateBuffer(&uniformBufferDesc);
 
     // Bind Group Layout
-    wgpu::BindGroupLayoutEntry entries[7]{};
+    wgpu::BindGroupLayoutEntry entries[9]{};
 
     // output texture
     entries[0].binding = 0;
@@ -126,23 +128,26 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     entries[3].visibility = wgpu::ShaderStage::Compute;
     entries[3].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
 
-    // ColorPool
+    // Feedback Buffer Count
     entries[4].binding = 4;
     entries[4].visibility = wgpu::ShaderStage::Compute;
-    entries[4].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[4].buffer.type = wgpu::BufferBindingType::Storage;
 
-    // Feedback Buffer Count
+    // Feedback Buffer indices
     entries[5].binding = 5;
     entries[5].visibility = wgpu::ShaderStage::Compute;
     entries[5].buffer.type = wgpu::BufferBindingType::Storage;
 
-    // Feedback Buffer indices
-    entries[6].binding = 6;
-    entries[6].visibility = wgpu::ShaderStage::Compute;
-    entries[6].buffer.type = wgpu::BufferBindingType::Storage;
+    // ColorPool
+    for (int i = 0; i < numColorBuffers; ++i)
+    {
+        entries[6 + i].binding = 6 + i;
+        entries[6 + i].visibility = wgpu::ShaderStage::Compute;
+        entries[6 + i].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    }
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-    bindGroupLayoutDesc.entryCount = 7;
+    bindGroupLayoutDesc.entryCount = 6 + numColorBuffers;
     bindGroupLayoutDesc.entries = entries;
     pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
@@ -164,7 +169,7 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
 }
 
 //================================//
-void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
+void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper, int numColorBuffers)
 {
     pipelineWrapper.isCompute = true;
 
@@ -183,11 +188,12 @@ void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrap
 
     wgpu::ShaderModuleDescriptor shaderModuleDesc{};
     shaderModuleDesc.nextInChain = &wgsl;
+    shaderModuleDesc.label = "ComputeUploadVoxelShaderModule";
 
     pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
 
     // Bind Group Layout
-    wgpu::BindGroupLayoutEntry entries[4]{};
+    wgpu::BindGroupLayoutEntry entries[6]{};
 
     // Read upload buffer
     entries[0].binding = 0;
@@ -197,18 +203,21 @@ void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrap
     // BrickPool, colorPool, uniform with upload count
     entries[1].binding = 1;
     entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].buffer.type = wgpu::BufferBindingType::Storage;
+    entries[1].buffer.type = wgpu::BufferBindingType::Uniform;
 
     entries[2].binding = 2;
     entries[2].visibility = wgpu::ShaderStage::Compute;
     entries[2].buffer.type = wgpu::BufferBindingType::Storage;
 
-    entries[3].binding = 3;
-    entries[3].visibility = wgpu::ShaderStage::Compute;
-    entries[3].buffer.type = wgpu::BufferBindingType::Uniform;
+    for (int i = 0; i < numColorBuffers; ++i)
+    {
+        entries[3 + i].binding = 3 + i;
+        entries[3 + i].visibility = wgpu::ShaderStage::Compute;
+        entries[3 + i].buffer.type = wgpu::BufferBindingType::Storage;
+    }
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-    bindGroupLayoutDesc.entryCount = 4;
+    bindGroupLayoutDesc.entryCount = 3 + numColorBuffers;
     bindGroupLayoutDesc.entries = entries;
     pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
@@ -247,6 +256,7 @@ void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipe
 
     wgpu::ShaderModuleDescriptor shaderModuleDesc{};
     shaderModuleDesc.nextInChain = &wgsl;
+    shaderModuleDesc.label = "BlitShaderModule";
 
     pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
     if (!pipelineWrapper.shaderModule)

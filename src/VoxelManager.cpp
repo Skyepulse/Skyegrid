@@ -1,6 +1,8 @@
 #include "../includes/VoxelManager.hpp"
+#include "../includes/constants.hpp"
 #include <iostream>
 #include <bitset>
+#include <string>
 
 //================================//
 struct feedbackCallbackContext 
@@ -84,6 +86,8 @@ void VoxelManager::setVoxel(int x, int y, int z, bool filled, ColorRGB color)
     int bz = z / 8;
 
     int brickIndex = bx + by * this->BrickResolution + bz * this->BrickResolution * this->BrickResolution;
+    assert(brickIndex >= 0 && brickIndex < static_cast<int>(brickMaps.size()));
+
     BrickMapCPU& brick = brickMaps[brickIndex];
 
     int lx = x % 8;
@@ -217,6 +221,8 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
 
         UploadEntry& entry = uploads[pendingUploadCount++];
         entry.gpuBrickSlot = brick.gpuBrickIndex; // The free slot allocated above
+        assert(entry.gpuBrickSlot < (BrickResolution * BrickResolution * BrickResolution));
+
         std::memcpy(entry.occupancy, brick.occupancy, sizeof(entry.occupancy));
         std::memcpy(entry.colors, brick.colors, sizeof(entry.colors));
 
@@ -334,15 +340,7 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     this->brickGrid.resize(this->BrickResolution * this->BrickResolution * this->BrickResolution);
     for(int i = 0; i < this->brickGrid.size(); ++i)
     {
-        // Go From red to green depending on index: 0: pure red, max: pure green
-        ColorRGB brickColor = {
-            uint8_t(255 - (i * 255) / this->brickGrid.size()),
-            uint8_t((i * 255) / this->brickGrid.size()),
-            0,
-            0
-        };
-
-        this->brickGrid[i].pointer = PackLOD(brickColor);
+        this->brickGrid[i].pointer = PackEmptyPointer();
     }
 
     const uint32_t MAX_GPU_BRICKS = this->BrickResolution * this->BrickResolution * this->BrickResolution;
@@ -384,14 +382,46 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     desc.mappedAtCreation = false;
     wgpuBundle.SafeCreateBuffer(&desc, this->brickPoolBuffer);
 
-    // [3] COLOR POOL BUFFER
+    // [3] COLOR POOL BUFFERS
     // 512 voxels * 3 bytes per voxel
-    const uint64_t colorPerBrickSize = 2048; // for alignment
-    desc.size = static_cast<uint64_t>(MAX_GPU_BRICKS) * colorPerBrickSize;
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-    desc.label = "Color Pool Buffer";
-    desc.mappedAtCreation = false;
-    wgpuBundle.SafeCreateBuffer(&desc, this->colorPoolBuffer);
+    this->colorPoolBuffers.resize(MAX_COLOR_POOLS);
+    uint64_t poolSize = maxColorBufferSize * sizeof(uint32_t);
+    uint64_t totalColorSizeNeeded = static_cast<uint64_t>(MAX_GPU_BRICKS) * static_cast<uint64_t>(COLOR_BYTES_PER_BRICK);
+    uint64_t remaining = totalColorSizeNeeded; // total size needed across all pools
+
+    for (uint32_t i = 0; i < MAX_COLOR_POOLS; ++i)
+    {
+        uint64_t bufferSize = 0;
+
+        if (i < numberOfColorPools)
+        {
+            bufferSize = std::min(poolSize, remaining);
+
+            if (bufferSize < sizeof(uint32_t))
+                bufferSize = sizeof(uint32_t);
+
+            remaining -= std::min(poolSize, remaining);
+
+            desc.size  = bufferSize;
+            std::cout << "[VoxelManager] Creating Color Pool Buffer " << i << " of size " << desc.size / 1024 << " KB\n";
+            desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+            desc.label =
+                ("Color Pool Buffer " + std::to_string(i)).c_str();
+            desc.mappedAtCreation = false;
+
+            wgpuBundle.SafeCreateBuffer(&desc, colorPoolBuffers[i]);
+        }
+        else
+        {
+            desc.size  = sizeof(uint32_t);
+            desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+            desc.label =
+                ("Dummy Color Pool Buffer " + std::to_string(i)).c_str();
+            desc.mappedAtCreation = false;
+
+            wgpuBundle.SafeCreateBuffer(&desc, colorPoolBuffers[i]);
+        }
+    }
 
     // [4] FEEDBACK BUFFERS
     // feedbackCount init is a single uint32_t set to 0
@@ -440,7 +470,7 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     wgpuBundle.SafeCreateBuffer(&desc, this->CPUuploadBuffer);
 
     // Upload count uniform buffer
-    desc.size = sizeof(uint32_t);
+    desc.size = sizeof(UploadUniform);
     desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
     desc.label = "Upload Count Uniform Buffer";
     desc.mappedAtCreation = false;
@@ -450,7 +480,8 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
 //================================//
 void VoxelManager::createUploadBindGroup(RenderPipelineWrapper& pipelineWrapper, WgpuBundle& wgpuBundle)
 {
-    wgpu::BindGroupEntry entries[4]{};
+    // entries: 6, since max color pools is 3
+    wgpu::BindGroupEntry entries[6]{};
 
     entries[0].binding = 0;
     entries[0].buffer = this->uploadBuffer;
@@ -458,23 +489,26 @@ void VoxelManager::createUploadBindGroup(RenderPipelineWrapper& pipelineWrapper,
     entries[0].size = this->uploadBuffer.GetSize();
 
     entries[1].binding = 1;
-    entries[1].buffer = this->brickPoolBuffer;
+    entries[1].buffer = this->uploadCountUniform;
     entries[1].offset = 0;
-    entries[1].size = this->brickPoolBuffer.GetSize();
+    entries[1].size = this->uploadCountUniform.GetSize();
 
     entries[2].binding = 2;
-    entries[2].buffer = this->colorPoolBuffer;
+    entries[2].buffer = this->brickPoolBuffer;
     entries[2].offset = 0;
-    entries[2].size = this->colorPoolBuffer.GetSize();
+    entries[2].size = this->brickPoolBuffer.GetSize();
 
-    entries[3].binding = 3;
-    entries[3].buffer = this->uploadCountUniform;
-    entries[3].offset = 0;
-    entries[3].size = this->uploadCountUniform.GetSize();
+    for (int i = 0; i < MAX_COLOR_POOLS; ++i)
+    {
+        entries[3 + i].binding = 3 + i;
+        entries[3 + i].buffer = this->colorPoolBuffers[i];
+        entries[3 + i].offset = 0;
+        entries[3 + i].size = this->colorPoolBuffers[i].GetSize();
+    }
 
     wgpu::BindGroupDescriptor bindGroupDesc{};
     bindGroupDesc.layout = pipelineWrapper.bindGroupLayout;
-    bindGroupDesc.entryCount = 4;
+    bindGroupDesc.entryCount = 6;
     bindGroupDesc.entries = entries;
 
     pipelineWrapper.bindGroup = wgpuBundle.GetDevice().CreateBindGroup(&bindGroupDesc);

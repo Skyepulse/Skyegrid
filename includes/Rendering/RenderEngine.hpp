@@ -24,7 +24,7 @@ struct VoxelParameters
 {
     Eigen::Matrix4f pixelToRay;
     Eigen::Vector3f cameraOrigin;
-    uint32_t _pad0;
+    uint32_t maxColorBufferSize; // Used to derive which color pool to read from
     uint32_t voxelResolution;
     float time;
     float _pad1[2];
@@ -40,14 +40,17 @@ public:
         // Create Debug Pipeline
         this->wgpuBundle = bundle;
         
+        // Create Voxel Manager
+        this->voxelManager = std::make_unique<VoxelManager>(*this->wgpuBundle, static_cast<int>(MAXIMUM_VOXEL_RESOLUTION));
+        
         // Create Camera
         WindowFormat windowFormat = bundle->GetWindowFormat();
         this->camera = std::make_unique<Camera>(Eigen::Vector2f(static_cast<float>(windowFormat.width), static_cast<float>(windowFormat.height)));
 
         std::cout << "[RenderEngine] Creating Pipelines...\n";
         CreateRenderPipelineDebug(*this->wgpuBundle, this->debugPipeline);
-        CreateComputeVoxelPipeline(*this->wgpuBundle, this->computeVoxelPipeline);
-        CreateComputeUploadVoxelPipeline(*this->wgpuBundle, this->computeUploadVoxelPipeline);
+        CreateComputeVoxelPipeline(*this->wgpuBundle, this->computeVoxelPipeline, MAX_COLOR_POOLS);
+        CreateComputeUploadVoxelPipeline(*this->wgpuBundle, this->computeUploadVoxelPipeline, MAX_COLOR_POOLS);
         CreateBlitVoxelPipeline(*this->wgpuBundle, this->blitVoxelPipeline);
         std::cout << "[RenderEngine] Creating pipelines completed.\n";
 
@@ -78,7 +81,7 @@ private:
     std::unique_ptr<Camera> camera;
 
     std::vector<uint32_t> texelInfo;
-    std::unique_ptr<VoxelManager> voxelManager = std::make_unique<VoxelManager>(static_cast<int>(MAXIMUM_VOXEL_RESOLUTION));
+    std::unique_ptr<VoxelManager> voxelManager;
 };
 
 #endif // RENDER_ENGINE_HPP

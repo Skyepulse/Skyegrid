@@ -15,6 +15,7 @@ const int MAX_FEEDBACK = 8192;
 // Max bricks is max index that we can pack in 24 bits, which is 2^24 - 1
 const int MAX_BRICKS = 16777215;
 const int COLOR_BYTES_PER_BRICK = 2048; // 8x8x8 voxels, 1 byte per voxel (RGB packed), aligned to 2048 bytes
+const int MAX_COLOR_POOLS = 3;
 //================================//
 struct ColorRGB
 {
@@ -59,20 +60,60 @@ struct UploadEntry
     ColorRGB colors[512];
 };
 
+struct UploadUniform
+{
+    uint32_t uploadCount;
+    uint32_t maxColorBufferSize;
+};
+
 //================================//
 class VoxelManager
 {
 public:
-    VoxelManager(int resolution) : resolution(resolution) 
+    VoxelManager(WgpuBundle& bundle, int resolution) : resolution(resolution) 
     {
+        static_assert(sizeof(ColorRGB) == 4); // packed in UINT32
+
         BrickResolution = resolution / 8; // A brick is 8x8x8 voxels
         const int num_bricks = BrickResolution * BrickResolution * BrickResolution;
 
         if (num_bricks > MAX_BRICKS)
         {
+            std::cout << "[VoxelManager] Voxel resolution too high, exceeds maximum number of bricks that can be addressed." << std::endl;
             throw std::runtime_error("[VoxelManager] Voxel resolution too high, exceeds maximum number of bricks that can be addressed.");
         }
+
+        // Compute number of color pools needed
+        uint64_t maxBufferSize = bundle.GetLimits().maxBufferSize;
+
+        // Since we cannot split a voxel color in two, make sure we clamp the maxBufferSize to a multiple of COLOR_BYTES_PER_BRICK
+        uint64_t maxColorBufferSize = (maxBufferSize / COLOR_BYTES_PER_BRICK) * COLOR_BYTES_PER_BRICK;
+        this->maxColorBufferSize = static_cast<uint32_t>(maxColorBufferSize / sizeof(ColorRGB)); // in number of ColorRGB entries per buffer pool entry
+
+        uint64_t totalColorSizeNeeded = uint64_t(num_bricks) * COLOR_BYTES_PER_BRICK; // num_bricks * 2048
+        numberOfColorPools = static_cast<uint32_t>((totalColorSizeNeeded + maxColorBufferSize - 1) / maxColorBufferSize); // ceiling division
+        if (numberOfColorPools <= 0)
+        {
+            std::cout << "[VoxelManager] No color pool buffers needed. This should not happen." << std::endl;
+            throw std::runtime_error("[VoxelManager] No color pool buffers needed. This should not happen.");
+        }
+        if (numberOfColorPools > MAX_COLOR_POOLS)
+        {
+            std::cout << "[VoxelManager] Voxel resolution too high, exceeds maximum color pool buffers. Would need " << numberOfColorPools << " but max is " << MAX_COLOR_POOLS << "." << std::endl;
+            // compute max possible voxel resolution with this limit
+            // since the max size per pool is maxColorBufferSize, total size is MAX_COLOR_POOLS * maxColorBufferSize
+            uint64_t maxTotalColorSize = uint64_t(MAX_COLOR_POOLS) * maxColorBufferSize;
+            uint64_t maxBricksPossible = maxTotalColorSize / COLOR_BYTES_PER_BRICK;
+            uint64_t maxVoxels = static_cast<uint64_t>(maxBricksPossible) * 512;
+            // resolution is maxVoxels^(1/3)
+
+            uint32_t maxResolution = std::pow(maxVoxels, 1.0 / 3.0);
+            std::cout << "[VoxelManager] Maximum possible voxel resolution with current limits is approximately " << maxResolution << " (" << maxVoxels << " total voxels)." << std::endl;
+            throw std::runtime_error("[VoxelManager] Voxel resolution too high, exceeds maximum color pool buffers.");
+        }
+
         std::cout << "[VoxelManager] Created with voxel resolution " << resolution << " (" << resolution * resolution * resolution << " total voxels)." << std::endl;
+        std::cout << "[VoxelManager] Using " << numberOfColorPools << " color pool buffers." << std::endl;
     };
     ~VoxelManager()
     {
@@ -105,7 +146,8 @@ public:
     //GPU storage
     wgpu::Buffer brickGridBuffer;
     wgpu::Buffer brickPoolBuffer;
-    wgpu::Buffer colorPoolBuffer;
+
+    std::vector<wgpu::Buffer> colorPoolBuffers;
 
     wgpu::Buffer feedbackCountBuffer;
     wgpu::Buffer feedbackCountRESET;
@@ -121,6 +163,9 @@ public:
     std::vector<uint32_t> dirtyBrickIndices;
 
     uint32_t pendingUploadCount = 0;
+    uint32_t numberOfColorPools = 0;
+    uint32_t maxColorBufferSize = 0;
+
     uint64_t lastBrickIndex = 0; // DEBUG
 
 private:

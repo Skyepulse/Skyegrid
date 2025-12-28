@@ -70,8 +70,11 @@ void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int ma
         uint64_t maxTotalVisibleColorSize = uint64_t(MAX_COLOR_POOLS) * maxColorBufferSize;
         uint64_t maxVisibleBricksPossible = maxTotalVisibleColorSize / COLOR_BYTES_PER_BRICK;
 
+        std::cout << "[VoxelManager] Max visible bricks possible with current device limits: " << maxVisibleBricksPossible << std::endl;
+        std::cout << "We wanted to have... " << maxVisibleBricks << " visible bricks." << std::endl;
+
         // [1] clamp the max visible bricks to the possible maximum, with our 3 color pools
-        maxVisibleBricks = std::min(static_cast<uint64_t>(maxVisibleBricks), maxVisibleBricksPossible);
+        maxVisibleBricks = std::min(static_cast<uint64_t>(maxVisibleBricks), maxVisibleBricksPossible - 1);
     }
     else    
     {
@@ -107,7 +110,7 @@ void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int ma
     // Compute number of color pools needed
     if (this->hasColor)
     {
-        uint64_t totalColorBytesNeeded = maxVisibleBricks * COLOR_BYTES_PER_BRICK;
+        uint64_t totalColorBytesNeeded = static_cast<uint64_t>(this->maxVisibleBricks) * static_cast<uint64_t>(COLOR_BYTES_PER_BRICK);
         this->numberOfColorPools = static_cast<uint32_t>((totalColorBytesNeeded + maxColorBufferSize - 1) / maxColorBufferSize);
         if (this->numberOfColorPools > MAX_COLOR_POOLS)
         {
@@ -436,7 +439,7 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
 
         UploadEntry& entry = uploads[pendingUploadCount++];
         entry.gpuBrickSlot = brick.gpuBrickIndex;
-        assert(entry.gpuBrickSlot < (BrickResolution * BrickResolution * BrickResolution));
+        assert(entry.gpuBrickSlot < static_cast<uint32_t>(maxVisibleBricks));
 
         std::memcpy(entry.occupancy, brickMap.occupancy, sizeof(entry.occupancy));
         std::memcpy(entry.colors, brickMap.colors, sizeof(entry.colors));

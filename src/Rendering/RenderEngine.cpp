@@ -2,6 +2,75 @@
 #include <iostream>
 #include "../../includes/constants.hpp"
 #include <time.h>
+#include <numeric>
+
+//================================//
+void RenderEngine::InitImGui()
+{
+    std::cout << "[RenderEngine] Initializing ImGui...\n";
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    ImGui::StyleColorsDark();
+    GLFWwindow* window = this->wgpuBundle->GetGLFWWindow();
+
+    ImGui_ImplGlfw_InitForOther(window, true);
+
+    wgpu::Device device = this->wgpuBundle->GetDevice();
+    WindowFormat windowFormat = this->wgpuBundle->GetWindowFormat();
+
+    ImGui_ImplWGPU_InitInfo init_info = {};
+    init_info.Device = device.Get();
+    init_info.NumFramesInFlight = 3;
+    init_info.RenderTargetFormat = WGPUTextureFormat_BGRA8Unorm;
+
+    ImGui_ImplWGPU_Init(&init_info);
+    std::cout << "[RenderEngine] ImGui initialized successfully.\n";
+}
+
+//================================//
+void RenderEngine::RenderImGui(wgpu::RenderPassEncoder& pass)
+{
+    ImGui_ImplWGPU_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    ImGui::Begin("Voxel Controls");
+
+    ImGui::Text("Voxel Resolution: %d", this->GetVoxelResolution());
+    ImGui::Separator();
+
+    ImGui::SliderInt("Resolution", &sliderValue, 1, 2048);
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        if (sliderValue != previousSliderValue)
+        {
+            this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, sliderValue);
+
+            // recreate bind groups (needed)
+            this->resizePending = true;
+            this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
+
+            previousSliderValue = sliderValue;
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::Text("CPU Frame Time: %.3f ms", this->cpuFrameTimeMS);
+    ImGui::Separator();
+    ImGui::Text("GPU Ray Trace Time: %.3f ms", this->gpuFrameTimeRayTraceMs);
+    ImGui::Text("GPU Upload Time: %.3f ms", this->gpuFrameTimeUploadMs);
+    ImGui::Text("GPU Blit Time: %.3f ms", this->gpuFrameTimeBlitMs);
+    ImGui::Separator();
+
+    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+    ImGui::End();
+
+    ImGui::Render();
+    ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass.Get());
+}
 
 //================================//
 void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
@@ -126,6 +195,11 @@ void RenderEngine::Render(void* userData)
         return;
     }
 
+    auto cpuFrameStart = std::chrono::high_resolution_clock::now();
+
+    // PROCESS ASYNC OPERATIONS
+    wgpu::Instance instance = this->wgpuBundle->GetInstance();
+    this->voxelManager->processAsyncOperations(instance);
     this->voxelManager->startOfFrame();
 
     wgpu::TextureView swapchainView = currentTexture.texture.CreateView();
@@ -144,7 +218,8 @@ void RenderEngine::Render(void* userData)
     {
         UploadUniform uploadUniform{};
         uploadUniform.uploadCount = uploadCount;
-        uploadUniform.maxColorBufferSize = this->voxelManager->maxColorBufferSize;
+        uploadUniform.maxColorBufferSize = this->voxelManager->maxColorBufferEntries;
+        uploadUniform.hasColor = this->voxelManager->GetHasColor() ? 1 : 0;
 
         // Write uniform
         queue.WriteBuffer(
@@ -179,9 +254,10 @@ void RenderEngine::Render(void* userData)
         VoxelParameters voxelParams{};
         voxelParams.pixelToRay = this->camera->PixelToRayMatrix();
         voxelParams.cameraOrigin = this->camera->GetPosition();
-        voxelParams.maxColorBufferSize = this->voxelManager->maxColorBufferSize;
-        voxelParams.voxelResolution = MAXIMUM_VOXEL_RESOLUTION;
+        voxelParams.maxColorBufferSize = this->voxelManager->maxColorBufferEntries;
+        voxelParams.voxelResolution = static_cast<uint32_t>(this->voxelManager->GetVoxelResolution());
         voxelParams.time = static_cast<float>(renderInfo.time);
+        voxelParams.hasColor = this->voxelManager->GetHasColor() ? 1 : 0;
 
         queue.WriteBuffer(
             this->computeVoxelPipeline.associatedUniforms[0],
@@ -229,22 +305,76 @@ void RenderEngine::Render(void* userData)
         // Fullscreen triangle
         pass.Draw(3);
 
+        // ImGui rendering
+        this->RenderImGui(pass);
+
         pass.End();
     }
 
     wgpu::CommandBuffer commandBuffer = encoder.Finish();
     this->wgpuBundle->GetDevice().GetQueue().Submit(1, &commandBuffer);
 
-    // Wait for all futures
-    wgpu::Future readFeedbackFuture;
-    this->voxelManager->readFeedback(readFeedbackFuture);
+    // After submit, request mapping of the feedback buffer we just wrote to
+    // APPARENTLY THIS WILL NOT BLOCK! The callback will fire when the GPU is DONE
+    int feedbackSlot = this->voxelManager->currentFeedbackReadSlot;
+    if (this->voxelManager->feedbackBufferSlots[feedbackSlot].state == BufferState::Available)
+    {
+        this->voxelManager->feedbackBufferSlots[feedbackSlot].state = BufferState::MappingInFlight;
+        
+        // Create context for callback
+        struct FeedbackCtx {
+            VoxelManager* vm;
+            int slot;
+        };
+        auto* ctx = new FeedbackCtx{this->voxelManager.get(), feedbackSlot};
+        
+        size_t bufferSize = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t);
+        
+        this->voxelManager->feedbackBufferSlots[feedbackSlot].cpuBuffer.MapAsync(
+            wgpu::MapMode::Read,
+            0,
+            bufferSize,
+            wgpu::CallbackMode::AllowProcessEvents,
+            [](wgpu::MapAsyncStatus status, wgpu::StringView message, FeedbackCtx* ctx) {
+                FeedbackBufferSlot& slot = ctx->vm->feedbackBufferSlots[ctx->slot];
+                
+                if (status == wgpu::MapAsyncStatus::Success)
+                {
+                    const uint8_t* mappedData = static_cast<const uint8_t*>(
+                        slot.cpuBuffer.GetConstMappedRange()
+                    );
+                    
+                    uint32_t count = *reinterpret_cast<const uint32_t*>(mappedData);
+                    count = std::min(count, static_cast<uint32_t>(MAX_FEEDBACK));
+                    
+                    const uint32_t* indices = reinterpret_cast<const uint32_t*>(
+                        mappedData + sizeof(uint32_t)
+                    );
+                    
+                    ctx->vm->feedbackRequests.resize(count);
+                    if (count > 0)
+                    {
+                        memcpy(ctx->vm->feedbackRequests.data(), indices, count * sizeof(uint32_t));
+                    }
+                    
+                    ctx->vm->hasPendingFeedback = true;
+                    
+                    slot.cpuBuffer.Unmap();
+                }
+                
+                slot.state = BufferState::Available;
+                delete ctx;
+            },
+            ctx
+        );
+    }
 
-    wgpu::Future remapUploadFuture;
-    bool remapRequested = this->voxelManager->remapUploadBuffer(remapUploadFuture);
-
-    this->wgpuBundle->GetInstance().WaitAny(readFeedbackFuture, UINT64_MAX);
-    if (remapRequested)
-        this->wgpuBundle->GetInstance().WaitAny(remapUploadFuture, UINT64_MAX);
+    auto cpuFrameEnd = std::chrono::high_resolution_clock::now();
+    double cpuFrameMs = std::chrono::duration<double, std::milli>(cpuFrameEnd - cpuFrameStart).count();
+    this->cpuFrameAccumulator.push_back(static_cast<float>(cpuFrameMs));
+    if (this->cpuFrameAccumulator.size() > 10)
+        this->cpuFrameAccumulator.erase(this->cpuFrameAccumulator.begin());
+    this->cpuFrameTimeMS = std::accumulate(this->cpuFrameAccumulator.begin(), this->cpuFrameAccumulator.end(), 0.0f) / static_cast<float>(this->cpuFrameAccumulator.size());
 }
 
 //================================//

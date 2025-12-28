@@ -11,7 +11,8 @@ struct ComputeVoxelParams
     maxColorBufferSize: u32,
     voxelResolution: u32,
     time: f32,
-    _pad1: vec2<f32>,
+    hasColor: u32,
+    _pad: u32,
 };
 
 //================================//
@@ -354,6 +355,7 @@ fn traverseGrid(rayOrigin: vec3<f32>, rayDir: vec3<f32>, color: ptr<function, ve
             if (brickUnloaded) // easy, load LOD color
             {
                 (*color) = loadLODColorBrickIndex(brickIndex);
+                writeFeedback(brickIndex);
                 return true;
             }
             else if (brickLoaded) // full brick, do voxel traversal
@@ -450,7 +452,15 @@ fn traverseBrick(rayOrigin: vec3<f32>, rayDir: vec3<f32>, tEnter: f32, tExit: f3
         if (hit)
         {
             // load color
-            (*color) = loadColor(brickSlot, voxelIndex);
+
+            if (params.hasColor == 0u)
+            {
+                (*color) = vec3<f32>(1.0, 1.0, 1.0);
+            }
+            else
+            {
+                (*color) = loadColor(brickSlot, voxelIndex);
+            }
             return true;
         }
 

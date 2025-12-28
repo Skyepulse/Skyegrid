@@ -8,7 +8,7 @@
 class SkyegridManager
 {
 public:
-    SkyegridManager(bool debugMode = false);
+    SkyegridManager(bool debugMode = false, int voxelResolution = 1168, int maxVisibleBricks = 100000);
     ~SkyegridManager();
 
     void RunMainLoop();

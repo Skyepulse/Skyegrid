@@ -5,12 +5,16 @@
 #include <string>
 
 //================================//
-struct feedbackCallbackContext 
+struct UploadMapCallbackContext 
 {
-    wgpu::Buffer mapBuffer;
-    size_t bufferSize;
-    std::vector<uint32_t>* feedbackIndices;
-    bool* done;
+    VoxelManager* voxelManager;
+    int slotIndex;
+};
+
+struct FeedbackMapCallbackContext 
+{
+    VoxelManager* voxelManager;
+    int slotIndex;
 };
 
 //================================//
@@ -34,6 +38,87 @@ static uint32_t PackResident(uint32_t index)
 static uint32_t PackEmptyPointer()
 {
     return 0u;
+}
+
+//================================//
+void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int maxVisibleBricks)
+{
+    // First of all, calculate limits to see if we support this resolution
+    uint64_t maxBufferSize = bundle.GetLimits().maxBufferSize;
+    uint64_t maxColorBufferSize = (maxBufferSize / static_cast<uint64_t>(COLOR_BYTES_PER_BRICK)) * static_cast<uint64_t>(COLOR_BYTES_PER_BRICK);
+    this->maxColorBufferEntries = static_cast<uint32_t>(maxColorBufferSize / sizeof(ColorRGB)); // in number of ColorRGB entries per buffer pool entry
+
+    if (resolution <= 0)
+    {
+        std::cout << "[VoxelManager] Voxel resolution must be positive." << std::endl;
+        throw std::runtime_error("[VoxelManager] Voxel resolution must be positive.");
+    }
+    else if (resolution < 8)
+    {
+        this->voxelResolution = 8;
+        this->BrickResolution = 1;
+        this->numberOfColorPools = this->hasColor ? 1 : 0;
+        this->maxVisibleBricks = 1;
+
+        std::cout << "[VoxelManager] Voxel resolution too low, clamping to 8." << std::endl;
+        return;
+    }
+
+    if (this->hasColor)
+    {
+        // Now compute maximum possible resolution of visible bricks
+        uint64_t maxTotalVisibleColorSize = uint64_t(MAX_COLOR_POOLS) * maxColorBufferSize;
+        uint64_t maxVisibleBricksPossible = maxTotalVisibleColorSize / COLOR_BYTES_PER_BRICK;
+
+        // [1] clamp the max visible bricks to the possible maximum, with our 3 color pools
+        maxVisibleBricks = std::min(static_cast<uint64_t>(maxVisibleBricks), maxVisibleBricksPossible);
+    }
+    else    
+    {
+        this->numberOfColorPools = 0;
+    }
+
+    if (resolution % 8 != 0)
+    {
+        resolution = (resolution / 8) * 8; // floor to nearest multiple of 8
+    }
+
+    // [2] check if the resolution forces a number of bricks higher than 24 bit encoding, max possible for our brick grid
+    int brickResolution = resolution / 8;
+    uint64_t numBricks = static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution);
+    if (numBricks > MAX_BRICKS)
+    {
+        // reduce resolution until it fits
+        while (numBricks >= MAX_BRICKS)
+        {
+            resolution -= 8;
+            brickResolution = resolution / 8;
+            numBricks = static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution);
+        }
+    }
+
+    this->voxelResolution = resolution;
+    this->BrickResolution = resolution / 8;
+
+    // Now clamp max visible bricks to total number of bricks, we cannot have more visible bricks than total bricks
+    maxVisibleBricks = std::min(maxVisibleBricks, static_cast<int>(numBricks));
+    this->maxVisibleBricks = maxVisibleBricks;
+    
+    // Compute number of color pools needed
+    if (this->hasColor)
+    {
+        uint64_t totalColorBytesNeeded = maxVisibleBricks * COLOR_BYTES_PER_BRICK;
+        this->numberOfColorPools = static_cast<uint32_t>((totalColorBytesNeeded + maxColorBufferSize - 1) / maxColorBufferSize);
+        if (this->numberOfColorPools > MAX_COLOR_POOLS)
+        {
+            std::cout << "[VoxelManager] Unable to allocate enough color pool buffers for the requested visible bricks (" << maxVisibleBricks << "). Max supported visible bricks is lower. THIS SHOULD NOT HAPPEN." << std::endl;
+            throw std::runtime_error("[VoxelManager] Unable to allocate enough color pool buffers for the requested visible bricks.");
+        }
+    }
+
+    std::cout << "[VoxelManager] Voxel resolution set to " << this->voxelResolution << " (" << static_cast<uint64_t>(this->voxelResolution) * this->voxelResolution * this->voxelResolution << " total voxels)." << std::endl;
+    std::cout << "[VoxelManager] Max visible bricks set to " << maxVisibleBricks << "." << std::endl;
+    std::cout << "[VoxelManager] Using " << numberOfColorPools << " color pool buffers." << std::endl;
 }
 
 //================================//
@@ -79,6 +164,8 @@ ColorRGB VoxelManager::computeBrickAverageColor(const BrickMapCPU& brick)
 }
 
 //================================//
+/*
+WE WILL COMPLETE THIS METHOD WITH READ FROM DISK LATER
 void VoxelManager::setVoxel(int x, int y, int z, bool filled, ColorRGB color)
 {
     int bx = x / 8;
@@ -123,6 +210,7 @@ void VoxelManager::setVoxel(int x, int y, int z, bool filled, ColorRGB color)
         dirtyBrickIndices.push_back(brickIndex); // Do not push if already dirty
     brick.dirty = true;
 }
+*/
 
 //================================//
 void VoxelManager::startOfFrame()
@@ -131,123 +219,254 @@ void VoxelManager::startOfFrame()
     dirtyBrickIndices.clear();
     pendingUploadCount = 0;
 
-    // Read all feedback requests, and for each requested brick, load the first voxel
-    for (uint32_t requestedBrickIndex : feedbackRequests)
-    {
-        BrickMapCPU& brick = brickMaps[requestedBrickIndex];
-
-        // For testing, set the first voxel in the brick to red
-        // Compute voxel coordinates
-        int bx = requestedBrickIndex % BrickResolution;
-        int by = (requestedBrickIndex / BrickResolution) % BrickResolution;
-        int bz = requestedBrickIndex / (BrickResolution * BrickResolution);
-
-        int vx = bx * 8;
-        int vy = by * 8;
-        int vz = bz * 8;
-
-        this->setVoxel(vx, vy, vz, true, ColorRGB{ 255, 0, 0 }); // set first voxel to red
-    }
+    // Process any pending feedback that was read from previous frames
+    processPendingFeedback();
 }
 
 //================================//
-// called when unmapping a buffer to map it again, with some luck it will be ready by next frame
-// if not we create another buffer and make a pool out of them
-bool VoxelManager::remapUploadBuffer(wgpu::Future& outFuture)
+void VoxelManager::processPendingFeedback()
 {
-    if (!requestRemap)
+    if (!hasPendingFeedback)
+        return;
+
+    const uint32_t maxValidIndex = static_cast<uint32_t>(brickGridCPU.size());
+    for (uint32_t requestedBrickIndex : this->feedbackRequests)
     {
-        return false;
+        if (requestedBrickIndex < maxValidIndex)
+        {
+            this->dirtyBrickIndices.push_back(requestedBrickIndex);
+        }
     }
 
-    static auto OnMapped = [](wgpu::MapAsyncStatus status,
-                            wgpu::StringView message,
-                            VoxelManager* userdata)
-    {
-        if (status != wgpu::MapAsyncStatus::Success)
-        {
-            std::cerr << "[VoxelManager] Failed to remap upload buffer: " << std::string(message) << std::endl;
-            return;
-        }
-    };
+    this->feedbackRequests.clear();
+    this->hasPendingFeedback = false;
+}
 
-    // Start the async mapping operation
-    outFuture = CPUuploadBuffer.MapAsync(
+//================================//
+void VoxelManager::requestUploadBufferMap(int slotIndex)
+{
+    UploadBufferSlot& slot = uploadBufferSlots[slotIndex];
+    
+    if (slot.state != BufferState::Available)
+        return; // Already mapping or mapped, we cannot request again on this slot
+    
+    slot.state = BufferState::MappingInFlight;
+    
+    UploadMapCallbackContext* ctx = new UploadMapCallbackContext{this, slotIndex};
+    
+    slot.cpuBuffer.MapAsync(
         wgpu::MapMode::Write,
         0,
         MAX_FEEDBACK * sizeof(UploadEntry),
-        wgpu::CallbackMode::WaitAnyOnly,
-        OnMapped,
-        this
+        wgpu::CallbackMode::AllowProcessEvents,
+        [](wgpu::MapAsyncStatus status, wgpu::StringView message, UploadMapCallbackContext* ctx) {
+            if (status == wgpu::MapAsyncStatus::Success)
+            {
+                ctx->voxelManager->uploadBufferSlots[ctx->slotIndex].state = BufferState::Mapped;
+            }
+            else
+            {
+                ctx->voxelManager->uploadBufferSlots[ctx->slotIndex].state = BufferState::Available;
+                std::cerr << "[VoxelManager] Upload buffer map failed for slot " << ctx->slotIndex << std::endl;
+            }
+            delete ctx;
+        },
+        ctx
     );
+}
 
-    requestRemap = false;
-    return true;
+//================================//
+void VoxelManager::requestFeedbackBufferMap(int slotIndex)
+{
+    FeedbackBufferSlot& slot = feedbackBufferSlots[slotIndex];
+    
+    if (slot.state != BufferState::Available)
+        return; // Same dhere
+    
+    slot.state = BufferState::MappingInFlight;
+    
+    // Create context for callback
+    FeedbackMapCallbackContext* ctx = new FeedbackMapCallbackContext{this, slotIndex};
+    
+    size_t bufferSize = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t);
+    
+    slot.cpuBuffer.MapAsync(
+        wgpu::MapMode::Read,
+        0,
+        bufferSize,
+        wgpu::CallbackMode::AllowProcessEvents,
+        [](wgpu::MapAsyncStatus status, wgpu::StringView message, FeedbackMapCallbackContext* ctx) {
+            FeedbackBufferSlot& slot = ctx->voxelManager->feedbackBufferSlots[ctx->slotIndex];
+            
+            if (status == wgpu::MapAsyncStatus::Success)
+            {
+                // Read the feedback data immediately while mapped
+                const uint8_t* mappedData = static_cast<const uint8_t*>(
+                    slot.cpuBuffer.GetConstMappedRange()
+                );
+                
+                uint32_t count = *reinterpret_cast<const uint32_t*>(mappedData);
+                count = std::min(count, static_cast<uint32_t>(MAX_FEEDBACK));
+                
+                const uint32_t* indices = reinterpret_cast<const uint32_t*>(
+                    mappedData + sizeof(uint32_t)
+                );
+                
+                // Copy feedback data
+                ctx->voxelManager->feedbackRequests.resize(count);
+                if (count > 0)
+                {
+                    memcpy(ctx->voxelManager->feedbackRequests.data(), indices, count * sizeof(uint32_t));
+                }
+                
+                ctx->voxelManager->hasPendingFeedback = true;
+                
+                // Unmap immediately after reading
+                slot.cpuBuffer.Unmap();
+                slot.state = BufferState::Available;
+            }
+            else
+            {
+                slot.state = BufferState::Available;
+                std::cerr << "[VoxelManager] Feedback buffer map failed for slot " << ctx->slotIndex << std::endl;
+            }
+            
+            delete ctx;
+        },
+        ctx
+    );
+}
+
+//================================//
+// MAIN POTIN FOR OUR ASYNC PROCESSING
+void VoxelManager::processAsyncOperations(wgpu::Instance& instance)
+{
+    instance.ProcessEvents(); // Apparently this fires the callbacks for mapping
+    
+    for (int i = 0; i < NUM_UPLOAD_BUFFERS; ++i)
+    {
+        if (uploadBufferSlots[i].state == BufferState::Available)
+        {
+            requestUploadBufferMap(i);
+        }
+    }
 }
 
 //================================//
 void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, const wgpu::CommandEncoder& encoder)
 {
-    if (dirtyBrickIndices.empty())
+    // Try to find an available mapped upload buffer
+    int availableSlot = -1;
+    for (int i = 0; i < NUM_UPLOAD_BUFFERS; ++i)
+    {
+        if (uploadBufferSlots[i].state == BufferState::Mapped)
+        {
+            availableSlot = i;
+            break;
+        }
+    }
+
+    // if we find NO available mapped buffer, therefore we cannot upload this frame, 
+    // or no need to upload anything, szwe pass
+    if (availableSlot < 0 || dirtyBrickIndices.empty())
+    {
+        // Still reset feedback count for next frame (htis is free)
+        encoder.CopyBufferToBuffer(
+            feedbackCountRESET, 0,
+            feedbackCountBuffer, 0,
+            sizeof(uint32_t)
+        );
+        
+        // Write updated brick grid to GPU FOR NOW ALL BRICKS, TODO: only dirty bricks
+        queue.WriteBuffer(
+            brickGridBuffer,
+            0,
+            brickGrid.data(),
+            brickGrid.size() * sizeof(BrickGridCell)
+        );
         return;
+    }
 
-    requestRemap = true;
-
-    // Map the CPU upload buffer (MapWrite | CopySrc)
-    UploadEntry* uploads = static_cast<UploadEntry*>(
-        CPUuploadBuffer.GetMappedRange(0, MAX_FEEDBACK * sizeof(UploadEntry))
-    );
+    // If we are here, we can map and upload
+    UploadBufferSlot& slot = uploadBufferSlots[availableSlot];
+    
+    // Get the mapped range
+    UploadEntry* uploads = static_cast<UploadEntry*>(slot.cpuBuffer.GetMappedRange(0, MAX_FEEDBACK * sizeof(UploadEntry)));
+    if (!uploads)
+    {
+        std::cerr << "[VoxelManager] Failed to get mapped range for upload buffer" << std::endl;
+        return;
+    }
 
     for (uint32_t brickGridIndex : dirtyBrickIndices)
     {
-        BrickMapCPU& brick = brickMaps[brickGridIndex];
+        BrickGridCellCPU& brick = brickGridCPU[brickGridIndex];
 
         // if it is dirty and not on gpu, we must allocate a brick slot
         if (!brick.onGPU)
         {
             if (freeBrickSlots.empty())
             {
-                // No free brick slots available on GPU
                 continue;
             }
 
-            // Allocate a brick slot
             brick.gpuBrickIndex = freeBrickSlots.back();
             freeBrickSlots.pop_back();
             brick.onGPU = true;
+
+            BrickMapCPU newBrickMap = {};
+            brickMaps[brickGridIndex] = newBrickMap;
+
+            // Initialize first voxel only (DEBUG)
+            BrickMapCPU& brickMap = brickMaps[brickGridIndex];
+            brickMap.occupancy[0] = 1u;
+            for (int i = 1; i < 16; ++i)
+                brickMap.occupancy[i] = 0u;
+            brickMap.colors[0] = {
+                static_cast<uint8_t>(rand() % 256),
+                static_cast<uint8_t>(rand() % 256),
+                static_cast<uint8_t>(rand() % 256)
+            };
+            brickMap.colors[1] = {0,0,0};
         }
 
         if (pendingUploadCount >= MAX_FEEDBACK) break;
 
+        BrickMapCPU& brickMap = brickMaps[brickGridIndex];
+
         UploadEntry& entry = uploads[pendingUploadCount++];
-        entry.gpuBrickSlot = brick.gpuBrickIndex; // The free slot allocated above
+        entry.gpuBrickSlot = brick.gpuBrickIndex;
         assert(entry.gpuBrickSlot < (BrickResolution * BrickResolution * BrickResolution));
 
-        std::memcpy(entry.occupancy, brick.occupancy, sizeof(entry.occupancy));
-        std::memcpy(entry.colors, brick.colors, sizeof(entry.colors));
+        std::memcpy(entry.occupancy, brickMap.occupancy, sizeof(entry.occupancy));
+        std::memcpy(entry.colors, brickMap.colors, sizeof(entry.colors));
 
         brickGrid[brickGridIndex].pointer = PackResident(brick.gpuBrickIndex);
         brick.dirty = false;
     }
-    CPUuploadBuffer.Unmap();
+
+    // Unmap the buffer before using it in a copy
+    slot.cpuBuffer.Unmap();
+    slot.state = BufferState::Available;  // Will be re-mapped by processAsyncOperations
+    slot.pendingCount = pendingUploadCount;
 
     if (pendingUploadCount > 0)
     {
         encoder.CopyBufferToBuffer(
-            CPUuploadBuffer, 0,               // Source: CPU upload buffer (MapWrite | CopySrc)
-            uploadBuffer, 0,                  // Destination: GPU upload buffer (Storage | CopyDst)
+            slot.cpuBuffer, 0,
+            uploadBuffer, 0,
             pendingUploadCount * sizeof(UploadEntry)
         );
     }
 
     // Set feedback count to 0 for next frame
     encoder.CopyBufferToBuffer(
-        feedbackCountRESET, 0,            // Source: reset buffer (MapWrite | CopySrc)
-        feedbackCountBuffer, 0,              // Destination: GPU buffer (Storage | CopyDst)
+        feedbackCountRESET, 0,
+        feedbackCountBuffer, 0,
         sizeof(uint32_t)
     );
 
-    // Write updated brick grid to GPU (no mapping, just write)
+    // Write updated brick grid to GPU
     queue.WriteBuffer(
         brickGridBuffer,
         0,
@@ -259,115 +478,171 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
 //================================//
 void VoxelManager::prepareFeedback(const wgpu::Queue& queue, const wgpu::CommandEncoder& encoder)
 {
-    // read the feedback buffer from GPU and process requested bricks
+    // Find an available feedback buffer slot for writing
+    int writeSlot = -1;
+    for (int i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
+    {
+        // Only use buffers that are Available (not mapped or mapping)
+        if (feedbackBufferSlots[i].state == BufferState::Available)
+        {
+            writeSlot = i;
+            break;
+        }
+    }
+    
+    if (writeSlot < 0)
+    {
+        // No buffer available, all are being mapped/read
+        // This is fine, we'll catch up next frame
+        return;
+    }
+    
+    currentFeedbackWriteSlot = writeSlot;
+    
+    // Copy feedback from GPU to the selected CPU buffer
+    FeedbackBufferSlot& slot = feedbackBufferSlots[writeSlot];
+    
     encoder.CopyBufferToBuffer(
         feedbackCountBuffer, 0,     
-        CPUfeedbackBuffer, 0, 
+        slot.cpuBuffer, 0, 
         sizeof(uint32_t)
     );
 
-    // We wrote a uint32_t count followed by MAX_FEEDBACK uint32_t indices
     encoder.CopyBufferToBuffer(
         feedbackIndicesBuffer, 0,     
-        CPUfeedbackBuffer, sizeof(uint32_t), 
+        slot.cpuBuffer, sizeof(uint32_t), 
         MAX_FEEDBACK * sizeof(uint32_t)
     );
+    
+    // After the encoder is submitted, we'll request a map on this buffer
+    // We mark it for mapping after submit, we save which slot to map (where the information was copied to)
+    currentFeedbackReadSlot = writeSlot;
 }
 
 //================================//
-void VoxelManager::readFeedback(wgpu::Future& outFuture)
+void VoxelManager::cleanupBuffers()
 {
-    // Now map the CPU feedback count buffer to read
-    static auto OnMapped = [](  wgpu::MapAsyncStatus status,
-                                wgpu::StringView message,
-                                feedbackCallbackContext* userdata)
+    this->brickGrid.clear();
+    this->brickGridCPU.clear();
+    this->brickMaps.clear();
+    this->freeBrickSlots.clear();
+
+    this->brickGridBuffer = nullptr;
+    this->brickPoolBuffer = nullptr;
+    this->colorPoolBuffers.clear();
+}
+
+//================================//
+void VoxelManager::initStaticBuffers(WgpuBundle& wgpuBundle)
+{
+    wgpu::BufferDescriptor desc{};
+
+    // [4] FEEDBACK BUFFERS
+    // feedbackCount init is a single uint32_t set to 0
+    uint32_t feedbackCountInit = 0;
+    desc.size = sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
+    desc.label = "Feedback Count Buffer (GPU)";
+    desc.mappedAtCreation = false;
+    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackCountBuffer);
+
+    // Reset buffer for feedback count
+    desc.size = sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+    desc.mappedAtCreation = true; // So we can initialize it to 0 right away
+    desc.label = "Feedback Count Reset Buffer (RESET)";
+    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackCountRESET);
+    memcpy(feedbackCountRESET.GetMappedRange(), &feedbackCountInit, sizeof(uint32_t));
+    feedbackCountRESET.Unmap();
+
+    // now the feedback indices buffer
+    desc.size = MAX_FEEDBACK * sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc;
+    desc.label = "Feedback Indices Buffer (GPU)";
+    desc.mappedAtCreation = false;
+    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackIndicesBuffer);
+
+    // Double-buffered CPU feedback buffers
+    for (int i = 0; i < NUM_FEEDBACK_BUFFERS; ++i)
     {
-        auto* ctx = reinterpret_cast<feedbackCallbackContext*>(userdata);
+        desc.size = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t); // count (u32) + indices (u32[])
+        desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
+        desc.label = ("Feedback Buffer CPU " + std::to_string(i)).c_str();
+        desc.mappedAtCreation = false;
+        wgpuBundle.SafeCreateBuffer(&desc, feedbackBufferSlots[i].cpuBuffer);
+        feedbackBufferSlots[i].state = BufferState::Available;
+    }
 
-        if (status == wgpu::MapAsyncStatus::Success)
-        {
-            // When reading, the first uint32_t is the count, and then follow the indices
-            const uint8_t* mappedData = static_cast<const uint8_t*>(ctx->mapBuffer.GetConstMappedRange(0, ctx->bufferSize));
-            uint32_t feedbackCount = *reinterpret_cast<const uint32_t*>(mappedData);
-            if (feedbackCount > MAX_FEEDBACK)
-                feedbackCount = MAX_FEEDBACK;
-            else if (feedbackCount == 0)
-            {
-                ctx->mapBuffer.Unmap();
-                *(ctx->done) = true;
-                delete ctx;
-                return;
-            }
+    // Upload buffer initialization
+    desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    desc.label = "Upload Buffer (GPU)";
+    desc.mappedAtCreation = false;
+    wgpuBundle.SafeCreateBuffer(&desc, this->uploadBuffer);
 
-            ctx->feedbackIndices->resize(feedbackCount);
-            const uint32_t* indicesPtr = reinterpret_cast<const uint32_t*>(mappedData + sizeof(uint32_t));
-            for (uint32_t i = 0; i < feedbackCount; ++i)
-            {
-                (*ctx->feedbackIndices)[i] = indicesPtr[i];
-            }
+    // Double-buffered CPU upload buffers
+    for (int i = 0; i < NUM_UPLOAD_BUFFERS; ++i)
+    {
+        desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
+        desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+        desc.label = ("Upload Buffer CPU " + std::to_string(i)).c_str();
+        desc.mappedAtCreation = true; // SO ALL IN POOL ARE AVAILABLE INITIALLY
+        wgpuBundle.SafeCreateBuffer(&desc, uploadBufferSlots[i].cpuBuffer);
+        uploadBufferSlots[i].state = BufferState::Mapped;
+        uploadBufferSlots[i].pendingCount = 0;
+    }
 
-            ctx->mapBuffer.Unmap();
-        }
-        else
-        {
-            std::cerr << "Failed to map buffer: " << message << std::endl;
-        }
-
-        *(ctx->done) = true;
-        delete ctx;
-    };
-
-    feedbackCallbackContext* context = new feedbackCallbackContext();
-    context->mapBuffer = CPUfeedbackBuffer;
-    context->bufferSize = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t);
-    context->done = new bool(false);
-    context->feedbackIndices = &this->feedbackRequests; 
-    outFuture = CPUfeedbackBuffer.MapAsync(
-        wgpu::MapMode::Read,
-        0,
-        context->bufferSize,
-        wgpu::CallbackMode::WaitAnyOnly,
-        OnMapped,
-        context
-    );
+    // Upload count uniform buffer
+    desc.size = sizeof(UploadUniform);
+    desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    desc.label = "Upload Count Uniform Buffer";
+    desc.mappedAtCreation = false;
+    wgpuBundle.SafeCreateBuffer(&desc, this->uploadCountUniform);
 }
 
 //================================//
-void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
+void VoxelManager::initDynamicBuffers(WgpuBundle& wgpuBundle)
 {
-    std::cout << "[VoxelManager] Initializing buffers on CPU side...\n";
+    cleanupBuffers();
+
+    const uint32_t numBricks = static_cast<uint64_t>(this->BrickResolution) * static_cast<uint64_t>(this->BrickResolution) * static_cast<uint64_t>(this->BrickResolution);
+    const uint32_t numVisibleBricks = static_cast<uint32_t>(this->maxVisibleBricks);
+    const uint64_t numVoxels = static_cast<uint64_t>(numBricks) * 512;
+
     // CPU storage initialization
-    this->brickGrid.resize(this->BrickResolution * this->BrickResolution * this->BrickResolution);
-    for(int i = 0; i < this->brickGrid.size(); ++i)
+    this->brickGrid.resize(numBricks);
+    this->brickGridCPU.resize(numBricks);
+    this->freeBrickSlots.resize(numVisibleBricks);
+
+    for(uint32_t i = 0; i < this->brickGrid.size(); ++i)
     {
-        this->brickGrid[i].pointer = PackEmptyPointer();
+        // Pack based on X, Y, Z color cube
+        int denom = BrickResolution == 1 ? 1 : BrickResolution - 1;
+        ColorRGB color = {
+            static_cast<uint8_t>((i % BrickResolution) * 255 / denom),
+            static_cast<uint8_t>(((i / BrickResolution) % BrickResolution) * 255 / denom),
+            static_cast<uint8_t>((i / (BrickResolution * BrickResolution)) * 255 / denom)
+        };
+
+        this->brickGrid[i].pointer = PackLOD(color); // Initially all bricks are unloaded
+
+        BrickGridCellCPU& cell = this->brickGridCPU[i];
+        cell.dirty = false;
+        cell.onGPU = false;
+        cell.gpuBrickIndex = UINT32_MAX;
+        cell.LODColor = color;
+    }
+    for (uint32_t i = 0; i < numVisibleBricks; ++i)
+    {
+        freeBrickSlots[i] = numVisibleBricks - 1 - i;
     }
 
-    const uint32_t MAX_GPU_BRICKS = this->BrickResolution * this->BrickResolution * this->BrickResolution;
-    this->freeBrickSlots.reserve(MAX_GPU_BRICKS);
-    for (uint32_t i = 0; i < MAX_GPU_BRICKS; ++i)
-    {
-        freeBrickSlots.push_back(i);
-    }
-
-    this->brickMaps.resize(this->BrickResolution * this->BrickResolution * this->BrickResolution);
-    for (BrickMapCPU& brick : this->brickMaps)
-    {
-        std::memset(brick.occupancy, 0, sizeof(brick.occupancy)); // Init to empty
-        std::memset(brick.colors, 0, sizeof(brick.colors)); // Init to black
-        brick.lodColor = {0,0,0};
-        brick.dirty = false;
-        brick.onGPU = false;
-        brick.gpuBrickIndex = UINT32_MAX;
-    }
-
-    std::cout << "[VoxelManager] Initializing buffers on GPU side...\n";
     // GPU storage initialization
     wgpu::Queue queue = wgpuBundle.GetDevice().GetQueue();
 
     // [1] BRICK GRID CELL
     wgpu::BufferDescriptor desc{};
-    desc.size = brickGrid.size() * sizeof(BrickGridCell); // a single uint64_t pointer per cell
+    desc.size = numBricks * sizeof(BrickGridCell); // a single uint32_t pointer per cell
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
     desc.label = "Brick Grid Buffer";
     desc.mappedAtCreation = false;
@@ -376,7 +651,7 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
 
     // [2] BRICK POOL BUFFER
     // The max number of bricks, is given by the Maximum Voxel Resolution divided by 8 (brick size)
-    desc.size = MAX_GPU_BRICKS * 16 * sizeof(uint32_t); // 8x8x8 occupancy per brick, times MAX_GPU_BRICKS
+    desc.size = numVisibleBricks * 16 * sizeof(uint32_t); // 8x8x8 occupancy per visible brick, times MAX_GPU_BRICKS
     desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
     desc.label = "Brick Pool Buffer";
     desc.mappedAtCreation = false;
@@ -385,15 +660,15 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
     // [3] COLOR POOL BUFFERS
     // 512 voxels * 3 bytes per voxel
     this->colorPoolBuffers.resize(MAX_COLOR_POOLS);
-    uint64_t poolSize = maxColorBufferSize * sizeof(uint32_t);
-    uint64_t totalColorSizeNeeded = static_cast<uint64_t>(MAX_GPU_BRICKS) * static_cast<uint64_t>(COLOR_BYTES_PER_BRICK);
+    uint64_t poolSize = this->maxColorBufferEntries * sizeof(uint32_t);
+    uint64_t totalColorSizeNeeded = static_cast<uint64_t>(numVisibleBricks) * static_cast<uint64_t>(COLOR_BYTES_PER_BRICK);
     uint64_t remaining = totalColorSizeNeeded; // total size needed across all pools
 
     for (uint32_t i = 0; i < MAX_COLOR_POOLS; ++i)
     {
         uint64_t bufferSize = 0;
 
-        if (i < numberOfColorPools)
+        if (i < numberOfColorPools && this->hasColor)
         {
             bufferSize = std::min(poolSize, remaining);
 
@@ -422,59 +697,6 @@ void VoxelManager::initBuffers(WgpuBundle& wgpuBundle)
             wgpuBundle.SafeCreateBuffer(&desc, colorPoolBuffers[i]);
         }
     }
-
-    // [4] FEEDBACK BUFFERS
-    // feedbackCount init is a single uint32_t set to 0
-    uint32_t feedbackCountInit = 0;
-    desc.size = sizeof(uint32_t);
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
-    desc.label = "Feedback Count Buffer (GPU)";
-    desc.mappedAtCreation = false;
-    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackCountBuffer);
-
-    // Reset buffer for feedback count
-    desc.size = sizeof(uint32_t);
-    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
-    desc.mappedAtCreation = true; // So we can initialize it to 0 right away
-    desc.label = "Feedback Count Reset Buffer (RESET)";
-    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackCountRESET);
-    memcpy(feedbackCountRESET.GetMappedRange(), &feedbackCountInit, sizeof(uint32_t));
-    feedbackCountRESET.Unmap();
-
-    // now the feedback indices buffer
-    desc.size = MAX_FEEDBACK * sizeof(uint32_t);
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc;
-    desc.label = "Feedback Indices Buffer (GPU)";
-    desc.mappedAtCreation = false;
-    wgpuBundle.SafeCreateBuffer(&desc, this->feedbackIndicesBuffer);
-
-    // CPU feedback indices AND count buffer
-    desc.size = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t);
-    desc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
-    desc.label = "Feedback Buffer (indices AND count) (CPU)";
-    desc.mappedAtCreation = false;
-    wgpuBundle.SafeCreateBuffer(&desc, this->CPUfeedbackBuffer);
-
-    // Upload buffer initialization
-    desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
-    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-    desc.label = "Upload Buffer (GPU)";
-    desc.mappedAtCreation = false;
-    wgpuBundle.SafeCreateBuffer(&desc, this->uploadBuffer);
-
-    // CPU upload buffer (one, then maybe we create more)
-    desc.size = MAX_FEEDBACK * sizeof(UploadEntry);
-    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
-    desc.label = "Upload Buffer (CPU)";
-    desc.mappedAtCreation = true; // So we can write to it right away
-    wgpuBundle.SafeCreateBuffer(&desc, this->CPUuploadBuffer);
-
-    // Upload count uniform buffer
-    desc.size = sizeof(UploadUniform);
-    desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-    desc.label = "Upload Count Uniform Buffer";
-    desc.mappedAtCreation = false;
-    wgpuBundle.SafeCreateBuffer(&desc, this->uploadCountUniform);
 }
 
 //================================//

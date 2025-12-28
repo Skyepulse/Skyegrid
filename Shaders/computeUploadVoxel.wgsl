@@ -12,6 +12,8 @@ struct Params
 {
     uploadCount: u32,
     maxColorBufferSize: u32,
+    hasColor: u32,
+    _pad: u32,
 };
 
 //================================//
@@ -58,6 +60,11 @@ fn writeBrick(brickSlot: u32, entry: UploadEntry)
         brickPool[brickSlot].occupancy[i] = entry.occupancy[i];
     }
 
+    if (params.hasColor == 0u)
+    {
+        return;
+    }
+    
     // Write colors
     let globalStart = brickSlot * 512u;
     for (var i: u32 = 0u; i < 512u; i = i + 1u)

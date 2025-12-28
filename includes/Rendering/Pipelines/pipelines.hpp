@@ -83,5 +83,6 @@ void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pi
 void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper, int numColorBuffers);
 void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper, int numColorBuffers);
 void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper);
+void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper, int numColorBuffers);
 
 #endif // PIPELINES_HPP

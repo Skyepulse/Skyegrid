@@ -42,18 +42,43 @@ void RenderEngine::RenderImGui(wgpu::RenderPassEncoder& pass)
     ImGui::Text("Voxel Resolution: %d", this->GetVoxelResolution());
     ImGui::Separator();
 
-    ImGui::SliderInt("Resolution", &sliderValue, 1, 2048);
+    ImGui::SliderInt("Voxel resolution", &resolutionSliderValue, 1, 2048);
     if (ImGui::IsItemDeactivatedAfterEdit())
     {
-        if (sliderValue != previousSliderValue)
+        if (resolutionSliderValue != previousResolutionSliderValue)
         {
-            this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, sliderValue);
+            // Change only resolution
+            this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, resolutionSliderValue);
+            resolutionSliderValue = this->voxelManager->GetVoxelResolution();
+            visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
 
             // recreate bind groups (needed)
             this->resizePending = true;
             this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 
-            previousSliderValue = sliderValue;
+            previousResolutionSliderValue = resolutionSliderValue;
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Max Visible Bricks: %d", this->voxelManager->GetMaxVisibleBricks());
+    ImGui::Separator();
+
+    ImGui::SliderInt("Max Visible Bricks", &visibleBricksSliderValue, 1, 3000000);
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        if (visibleBricksSliderValue != previousVisibleBricksSliderValue)
+        {
+            // Change only max visible bricks
+            this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, this->GetVoxelResolution(), visibleBricksSliderValue);
+            visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
+            resolutionSliderValue = this->voxelManager->GetVoxelResolution();
+
+            // recreate bind groups (needed)
+            this->resizePending = true;
+            this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
+
+            previousVisibleBricksSliderValue = visibleBricksSliderValue;
         }
     }
 

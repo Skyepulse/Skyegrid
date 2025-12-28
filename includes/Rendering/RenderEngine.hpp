@@ -65,8 +65,10 @@ public:
         this->voxelManager->initDynamicBuffers(*this->wgpuBundle);
         this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 
-        this->sliderValue = this->voxelManager->GetVoxelResolution();
-        this->previousSliderValue = this->sliderValue;
+        this->resolutionSliderValue = this->voxelManager->GetVoxelResolution();
+        this->previousResolutionSliderValue = this->resolutionSliderValue;
+        this->visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
+        this->previousVisibleBricksSliderValue = this->visibleBricksSliderValue;
         InitImGui();
         std::cout << "[RenderEngine] Render Engine initialized successfully.\n";
     }
@@ -89,6 +91,7 @@ private:
     void InitImGui();
     void RenderImGui(wgpu::RenderPassEncoder& pass);
     void onResolutionSliderValueChanged(int newResolution);
+    void onVisibleBricksSliderValueChanged(int newMaxVisibleBricks);
 
     void RebuildVoxelPipelineResources(const RenderInfo& renderInfo);
 
@@ -105,9 +108,12 @@ private:
     std::unique_ptr<VoxelManager> voxelManager;
 
     // ImGUI
-    int sliderValue = -1;
-    int previousSliderValue = -1;
+    int resolutionSliderValue = -1;
+    int previousResolutionSliderValue = -1;
+    int visibleBricksSliderValue = -1;
+    int previousVisibleBricksSliderValue = -1;
 
+    // Timing info
     float cpuFrameTimeMS = 0.0f;
     std::vector<float> cpuFrameAccumulator;
 

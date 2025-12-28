@@ -134,11 +134,15 @@ public:
 
     bool GetHasColor() const { return this->hasColor; }
     int GetVoxelResolution() const { return this->voxelResolution; }
-    void ChangeVoxelResolution(WgpuBundle& bundle, int newResolution)
+    int GetMaxVisibleBricks() const { return this->maxVisibleBricks; }
+    void ChangeVoxelResolution(WgpuBundle& bundle, int newResolution, int maxVisibleBricks = -1)
     {
         int currentResolution = this->voxelResolution;
-        validateResolution(bundle, newResolution, this->maxVisibleBricks);
-        if (currentResolution == this->voxelResolution)
+        int currentMaxVisibleBricks = this->maxVisibleBricks;
+        if (maxVisibleBricks < 0)
+            maxVisibleBricks = currentMaxVisibleBricks;
+        validateResolution(bundle, newResolution, maxVisibleBricks);
+        if (currentResolution == this->voxelResolution && currentMaxVisibleBricks == this->maxVisibleBricks)
             return; // We literally did not change anything
             
         // Clear any pending feedback/uploads that reference old brick indices

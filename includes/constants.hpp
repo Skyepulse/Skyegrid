@@ -10,6 +10,6 @@ constexpr int INITIAL_WINDOW_WIDTH = 1920;
 constexpr int INITIAL_WINDOW_HEIGHT = 1080;
 
 constexpr size_t COMPUTE_VOXEL_UNIFORM_SIZE = 16;
-constexpr bool HAS_VOXEL_COLOR = false;
+constexpr bool HAS_VOXEL_COLOR = true;
 
 #endif // CONSTANTS_HPP

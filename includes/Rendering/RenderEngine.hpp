@@ -10,6 +10,11 @@
 #include "../constants.hpp"
 #include <iostream>
 
+// ImGUI
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_wgpu.h"
+
 //================================//
 struct RenderInfo
 {
@@ -27,21 +32,22 @@ struct VoxelParameters
     uint32_t maxColorBufferSize; // Used to derive which color pool to read from
     uint32_t voxelResolution;
     float time;
-    float _pad1[2];
+    uint32_t hasColor;
+    uint32_t _pad;
 };
 
 //================================//
 class RenderEngine
 {
 public:
-    RenderEngine(WgpuBundle* bundle)
+    RenderEngine(WgpuBundle* bundle, int voxelResolution, int maxVisibleBricks)
     {
         std::cout << "[RenderEngine] Initializing Render Engine...\n";
         // Create Debug Pipeline
         this->wgpuBundle = bundle;
         
         // Create Voxel Manager
-        this->voxelManager = std::make_unique<VoxelManager>(*this->wgpuBundle, static_cast<int>(MAXIMUM_VOXEL_RESOLUTION));
+        this->voxelManager = std::make_unique<VoxelManager>(*this->wgpuBundle, voxelResolution, maxVisibleBricks);
         
         // Create Camera
         WindowFormat windowFormat = bundle->GetWindowFormat();
@@ -55,19 +61,34 @@ public:
         std::cout << "[RenderEngine] Creating pipelines completed.\n";
 
         std::cout << "[RenderEngine] Initializing Voxel Manager...\n";
-        this->voxelManager->initBuffers(*this->wgpuBundle);
+        this->voxelManager->initStaticBuffers(*this->wgpuBundle);
+        this->voxelManager->initDynamicBuffers(*this->wgpuBundle);
         this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 
+        this->sliderValue = this->voxelManager->GetVoxelResolution();
+        this->previousSliderValue = this->sliderValue;
+        InitImGui();
         std::cout << "[RenderEngine] Render Engine initialized successfully.\n";
     }
-    ~RenderEngine() = default;
+    ~RenderEngine()
+    {
+        // ImGUI Cleanup
+        ImGui_ImplWGPU_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+    }
 
     void Render(void* userData);
     void RenderDebug(void* userData);
 
     Camera* GetCamera() { return this->camera.get(); }
+    int GetVoxelResolution() const { return this->voxelManager->GetVoxelResolution(); }
 
 private:
+
+    void InitImGui();
+    void RenderImGui(wgpu::RenderPassEncoder& pass);
+    void onResolutionSliderValueChanged(int newResolution);
 
     void RebuildVoxelPipelineResources(const RenderInfo& renderInfo);
 
@@ -82,6 +103,20 @@ private:
 
     std::vector<uint32_t> texelInfo;
     std::unique_ptr<VoxelManager> voxelManager;
+
+    // ImGUI
+    int sliderValue = -1;
+    int previousSliderValue = -1;
+
+    float cpuFrameTimeMS = 0.0f;
+    std::vector<float> cpuFrameAccumulator;
+
+    float gpuFrameTimeRayTraceMs = 0.0f;
+    float gpuFrameTimeUploadMs = 0.0f;
+    float gpuFrameTimeBlitMs = 0.0f;
+    std::vector<float> gpuFrameRayTraceAccumulator;
+    std::vector<float> gpuFrameUploadAccumulator;
+    std::vector<float> gpuFrameBlitAccumulator;
 };
 
 #endif // RENDER_ENGINE_HPP

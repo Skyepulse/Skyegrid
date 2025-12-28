@@ -10,7 +10,7 @@ const float rotationSpeed = 0.05f;
 const float movementSpeed = 0.1f;
 
 //================================//
-SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(nullptr, &glfwDestroyWindow)
+SkyegridManager::SkyegridManager(bool debugMode, int voxelResolution, int maxVisibleBricks) : debugMode(debugMode), window(nullptr, &glfwDestroyWindow)
 {
     if (!glfwInit())
     {
@@ -34,11 +34,11 @@ SkyegridManager::SkyegridManager(bool debugMode) : debugMode(debugMode), window(
     this->renderInfo.width = static_cast<uint32_t>(INITIAL_WINDOW_WIDTH);
     this->renderInfo.height = static_cast<uint32_t>(INITIAL_WINDOW_HEIGHT);
     this->wgpuBundle = std::make_unique<WgpuBundle>(windowFormat);
-    this->renderEngine = std::make_unique<RenderEngine>(this->wgpuBundle.get());
+    this->renderEngine = std::make_unique<RenderEngine>(this->wgpuBundle.get(), voxelResolution, maxVisibleBricks);
 
     // Initialize Camera position
     this->renderEngine->GetCamera()->SetFov(45.0f);
-    float r = static_cast<float>(MAXIMUM_VOXEL_RESOLUTION);
+    float r = static_cast<float>(voxelResolution);
 
     this->renderEngine->GetCamera()->SetPosition(Eigen::Vector3f(r / 2.0f, r / 2.0f, -r * 1.5f));
     this->renderEngine->GetCamera()->LookAtPoint(Eigen::Vector3f(r / 2.0f, r / 2.0f, r / 2.0f));
@@ -112,7 +112,7 @@ void SkyegridManager::ProcessEvents(float deltaTime)
     Camera* camera = this->renderEngine->GetCamera();
 
     // Move Speed based on voxel grid size
-    float r = static_cast<float>(MAXIMUM_VOXEL_RESOLUTION) * 1.8f;
+    float r = static_cast<float>(this->renderEngine->GetVoxelResolution()) * 1.8f;
     float moveSpeed = movementSpeed * r / 100.0f;
 
     // If shift is held, increase speed

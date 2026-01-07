@@ -380,13 +380,12 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
             sizeof(uint32_t)
         );
         
-        // Write updated brick grid to GPU FOR NOW ALL BRICKS, TODO: only dirty bricks
-        queue.WriteBuffer(
-            brickGridBuffer,
-            0,
-            brickGrid.data(),
-            brickGrid.size() * sizeof(BrickGridCell)
+        encoder.CopyBufferToBuffer(
+            brickRequestFlagsRESET, 0,
+            brickRequestFlagsBuffer, 0,
+            brickRequestFlagsBuffer.GetSize()
         );
+
         return;
     }
 
@@ -400,6 +399,9 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
         std::cerr << "[VoxelManager] Failed to get mapped range for upload buffer" << std::endl;
         return;
     }
+
+    std::vector<uint32_t> modifiedIndices;
+    modifiedIndices.reserve(dirtyBrickIndices.size());
 
     for (uint32_t brickGridIndex : dirtyBrickIndices)
     {
@@ -417,11 +419,7 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
             freeBrickSlots.pop_back();
             brick.onGPU = true;
 
-            BrickMapCPU newBrickMap = {};
-            brickMaps[brickGridIndex] = newBrickMap;
-
-            // Initialize first voxel only (DEBUG)
-            BrickMapCPU& brickMap = brickMaps[brickGridIndex];
+            BrickMapCPU& brickMap = brickMaps[brickGridIndex] = {};
             brickMap.occupancy[0] = 1u;
             for (int i = 1; i < 16; ++i)
                 brickMap.occupancy[i] = 0u;
@@ -430,13 +428,11 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
                 static_cast<uint8_t>(rand() % 256),
                 static_cast<uint8_t>(rand() % 256)
             };
-            brickMap.colors[1] = {0,0,0};
         }
 
         if (pendingUploadCount >= MAX_FEEDBACK) break;
 
         BrickMapCPU& brickMap = brickMaps[brickGridIndex];
-
         UploadEntry& entry = uploads[pendingUploadCount++];
         entry.gpuBrickSlot = brick.gpuBrickIndex;
         assert(entry.gpuBrickSlot < static_cast<uint32_t>(maxVisibleBricks));
@@ -446,6 +442,7 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
 
         brickGrid[brickGridIndex].pointer = PackResident(brick.gpuBrickIndex);
         brick.dirty = false;
+        modifiedIndices.push_back(brickGridIndex);
     }
 
     // Unmap the buffer before using it in a copy
@@ -469,13 +466,42 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
         sizeof(uint32_t)
     );
 
-    // Write updated brick grid to GPU
-    queue.WriteBuffer(
-        brickGridBuffer,
-        0,
-        brickGrid.data(),
-        brickGrid.size() * sizeof(BrickGridCell)
+    encoder.CopyBufferToBuffer(
+        brickRequestFlagsRESET, 0,
+        brickRequestFlagsBuffer, 0,
+        brickRequestFlagsBuffer.GetSize()
     );
+
+    // Write updated brick grid to GPU
+    if (!modifiedIndices.empty())
+    {
+        std::sort(modifiedIndices.begin(), modifiedIndices.end());
+        
+        const size_t count = modifiedIndices.size();
+        size_t i = 0;
+        
+        while (i < count)
+        {
+            uint32_t rangeStart = modifiedIndices[i];
+            uint32_t rangeEnd = rangeStart;
+            
+            while (i + 1 < count && modifiedIndices[i + 1] == rangeEnd + 1)
+            {
+                ++i;
+                ++rangeEnd;
+            }
+            
+            // Write the contiguous range
+            uint32_t rangeSize = rangeEnd - rangeStart + 1;
+            queue.WriteBuffer(
+                brickGridBuffer,
+                rangeStart * sizeof(BrickGridCell),
+                &brickGrid[rangeStart],
+                rangeSize * sizeof(BrickGridCell)
+            );
+            i++;
+        }
+    }
 }
 
 //================================//
@@ -533,6 +559,9 @@ void VoxelManager::cleanupBuffers()
     this->brickGridBuffer = nullptr;
     this->brickPoolBuffer = nullptr;
     this->colorPoolBuffers.clear();
+
+    this->brickRequestFlagsBuffer = nullptr;
+    this->brickRequestFlagsRESET = nullptr;
 }
 
 //================================//
@@ -659,6 +688,21 @@ void VoxelManager::initDynamicBuffers(WgpuBundle& wgpuBundle)
     desc.label = "Brick Pool Buffer";
     desc.mappedAtCreation = false;
     wgpuBundle.SafeCreateBuffer(&desc, this->brickPoolBuffer);
+
+    desc.size = numBricks * sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    desc.label = "Brick Request Flags Buffer";
+    desc.mappedAtCreation = false;
+    wgpuBundle.SafeCreateBuffer(&desc, this->brickRequestFlagsBuffer);
+
+    std::vector<uint32_t> zeroFlags(numBricks, 0);
+    desc.size = numBricks * sizeof(uint32_t);
+    desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+    desc.label = "Brick Request Flags Reset Buffer";
+    desc.mappedAtCreation = true;
+    wgpuBundle.SafeCreateBuffer(&desc, this->brickRequestFlagsRESET);
+    memcpy(brickRequestFlagsRESET.GetMappedRange(), zeroFlags.data(), numBricks * sizeof(uint32_t));
+    brickRequestFlagsRESET.Unmap();
 
     // [3] COLOR POOL BUFFERS
     // 512 voxels * 3 bytes per voxel

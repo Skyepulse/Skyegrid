@@ -24,6 +24,8 @@ set(SRC_FILES
   src/Rendering/Camera/Camera.cpp
   src/VoxelManager.cpp
   includes/VoxelManager.hpp
+  includes/Voxelizer.hpp
+  src/Voxelizer.cpp
 )
 
 add_executable(Skyegrid ${SRC_FILES})
@@ -65,6 +67,7 @@ target_sources(Skyegrid PRIVATE
 target_include_directories(Skyegrid PRIVATE 
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${CMAKE_SOURCE_DIR}/includes
 )
 
 # Dawn specifics

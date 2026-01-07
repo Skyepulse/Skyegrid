@@ -39,7 +39,12 @@ public:
     }
 
     void SafeCreateBuffer(const wgpu::BufferDescriptor* descriptor, wgpu::Buffer& outBuffer);
-    
+
+    bool SupportsTimestampQuery()
+    {
+        return this->supportsTimestampQuery;
+    }
+
 private:
     void ComputeLimits();
     
@@ -65,6 +70,8 @@ private:
     bool resizeFlag = false;
 
     wgpu::Limits limits;
+
+    bool supportsTimestampQuery = false;
 };
 
 #endif // WGPU_BUNDLE_HPP

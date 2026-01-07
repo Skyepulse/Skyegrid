@@ -125,7 +125,7 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     // Compute pipeline bind group
     // Bind Group
     this->computeVoxelPipeline.bindGroup = nullptr;
-    std::vector<wgpu::BindGroupEntry> entries(9);
+    std::vector<wgpu::BindGroupEntry> entries(10);
 
     entries[0].binding = 0;
     entries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
@@ -167,6 +167,11 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
         entries[6 + i].offset = 0;
         entries[6 + i].size = this->voxelManager->colorPoolBuffers[i].GetSize();
     }
+
+    entries[9].binding = 9;
+    entries[9].buffer = this->voxelManager->brickRequestFlagsBuffer;
+    entries[9].offset = 0;
+    entries[9].size = this->voxelManager->brickRequestFlagsBuffer.GetSize();
 
     wgpu::BindGroupDescriptor bindGroupDesc{};
     bindGroupDesc.layout = this->computeVoxelPipeline.bindGroupLayout;
@@ -234,6 +239,9 @@ void RenderEngine::Render(void* userData)
     wgpu::CommandEncoderDescriptor cmdDesc{};
     wgpu::CommandEncoder encoder = this->wgpuBundle->GetDevice().CreateCommandEncoder(&cmdDesc);
 
+    wgpu::PassTimestampWrites uploadTimestamps{};
+    uploadTimestamps.querySet = this->gpuTimingQuerySet;
+
     // Update voxel data:
     this->voxelManager->update(*this->wgpuBundle, queue, encoder);
 
@@ -255,7 +263,13 @@ void RenderEngine::Render(void* userData)
         );
 
         wgpu::ComputePassDescriptor computePassDesc{};
-        computePassDesc.timestampWrites = nullptr;
+        uploadTimestamps.beginningOfPassWriteIndex = 0;
+        uploadTimestamps.endOfPassWriteIndex = 1;
+        if (this->wgpuBundle->SupportsTimestampQuery())
+            computePassDesc.timestampWrites = &uploadTimestamps;
+        else
+            computePassDesc.timestampWrites = nullptr;
+
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass(&computePassDesc);
 
         this->computeUploadVoxelPipeline.AssertInitialized();
@@ -292,7 +306,12 @@ void RenderEngine::Render(void* userData)
         );
 
         wgpu::ComputePassDescriptor computePassDesc{};
-        computePassDesc.timestampWrites = nullptr;
+        uploadTimestamps.beginningOfPassWriteIndex = 2;
+        uploadTimestamps.endOfPassWriteIndex = 3;
+        if (this->wgpuBundle->SupportsTimestampQuery())
+            computePassDesc.timestampWrites = &uploadTimestamps;
+        else
+            computePassDesc.timestampWrites = nullptr;
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass(&computePassDesc);
 
         this->computeVoxelPipeline.AssertInitialized();
@@ -320,6 +339,12 @@ void RenderEngine::Render(void* userData)
         wgpu::RenderPassDescriptor renderPassDesc{};
         renderPassDesc.colorAttachmentCount = 1;
         renderPassDesc.colorAttachments     = &colorAttachment;
+        uploadTimestamps.beginningOfPassWriteIndex = 4;
+        uploadTimestamps.endOfPassWriteIndex = 5;
+        if (this->wgpuBundle->SupportsTimestampQuery())
+            renderPassDesc.timestampWrites = &uploadTimestamps;
+        else
+            renderPassDesc.timestampWrites = nullptr;
 
         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPassDesc);
 
@@ -336,63 +361,32 @@ void RenderEngine::Render(void* userData)
         pass.End();
     }
 
+    if (this->wgpuBundle->SupportsTimestampQuery())
+    {
+        // Resolve timestamps
+        encoder.ResolveQuerySet(
+            this->gpuTimingQuerySet,
+            0,
+            6,
+            this->gpuTimingResolveBuffer,
+            0
+        );
+
+        encoder.CopyBufferToBuffer(
+            this->gpuTimingResolveBuffer,
+            0,
+            this->gpuTimingReadbackBuffers[currentTimingWriteBuffer],
+            0,
+            sizeof(uint64_t) * 6
+        );
+    }
+
     wgpu::CommandBuffer commandBuffer = encoder.Finish();
     this->wgpuBundle->GetDevice().GetQueue().Submit(1, &commandBuffer);
 
-    // After submit, request mapping of the feedback buffer we just wrote to
-    // APPARENTLY THIS WILL NOT BLOCK! The callback will fire when the GPU is DONE
-    int feedbackSlot = this->voxelManager->currentFeedbackReadSlot;
-    if (this->voxelManager->feedbackBufferSlots[feedbackSlot].state == BufferState::Available)
-    {
-        this->voxelManager->feedbackBufferSlots[feedbackSlot].state = BufferState::MappingInFlight;
-        
-        // Create context for callback
-        struct FeedbackCtx {
-            VoxelManager* vm;
-            int slot;
-        };
-        auto* ctx = new FeedbackCtx{this->voxelManager.get(), feedbackSlot};
-        
-        size_t bufferSize = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t);
-        
-        this->voxelManager->feedbackBufferSlots[feedbackSlot].cpuBuffer.MapAsync(
-            wgpu::MapMode::Read,
-            0,
-            bufferSize,
-            wgpu::CallbackMode::AllowProcessEvents,
-            [](wgpu::MapAsyncStatus status, wgpu::StringView message, FeedbackCtx* ctx) {
-                FeedbackBufferSlot& slot = ctx->vm->feedbackBufferSlots[ctx->slot];
-                
-                if (status == wgpu::MapAsyncStatus::Success)
-                {
-                    const uint8_t* mappedData = static_cast<const uint8_t*>(
-                        slot.cpuBuffer.GetConstMappedRange()
-                    );
-                    
-                    uint32_t count = *reinterpret_cast<const uint32_t*>(mappedData);
-                    count = std::min(count, static_cast<uint32_t>(MAX_FEEDBACK));
-                    
-                    const uint32_t* indices = reinterpret_cast<const uint32_t*>(
-                        mappedData + sizeof(uint32_t)
-                    );
-                    
-                    ctx->vm->feedbackRequests.resize(count);
-                    if (count > 0)
-                    {
-                        memcpy(ctx->vm->feedbackRequests.data(), indices, count * sizeof(uint32_t));
-                    }
-                    
-                    ctx->vm->hasPendingFeedback = true;
-                    
-                    slot.cpuBuffer.Unmap();
-                }
-                
-                slot.state = BufferState::Available;
-                delete ctx;
-            },
-            ctx
-        );
-    }
+    // Asynchronously read timing queries and feedbacks
+    this->ReadTimingQueries();
+    this->ReadFeedbacks();
 
     auto cpuFrameEnd = std::chrono::high_resolution_clock::now();
     double cpuFrameMs = std::chrono::duration<double, std::milli>(cpuFrameEnd - cpuFrameStart).count();
@@ -462,4 +456,146 @@ void RenderEngine::RenderDebug(void* userData)
     }
     wgpu::CommandBuffer commandBuffer = encoder.Finish();
     this->wgpuBundle->GetDevice().GetQueue().Submit(1, &commandBuffer);
+}
+
+//================================//
+void RenderEngine::InitializeGPUTimingQueries()
+{
+    if (!this->wgpuBundle->SupportsTimestampQuery())
+        return;
+
+    wgpu::QuerySetDescriptor queryDesc{};
+    queryDesc.type = wgpu::QueryType::Timestamp;
+    queryDesc.count = 6;
+    this->gpuTimingQuerySet = this->wgpuBundle->GetDevice().CreateQuerySet(&queryDesc);
+
+    wgpu::BufferDescriptor resolveDesc{};
+    resolveDesc.size = sizeof(uint64_t) * 6;
+    resolveDesc.usage = wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc;
+    this->gpuTimingResolveBuffer = this->wgpuBundle->GetDevice().CreateBuffer(&resolveDesc);
+
+    wgpu::BufferDescriptor readbackDesc{};
+    readbackDesc.size = sizeof(uint64_t) * 6;
+    readbackDesc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
+    for (int i = 0; i < 2; ++i)
+    {
+        this->gpuTimingReadbackBuffers[i] = this->wgpuBundle->GetDevice().CreateBuffer(&readbackDesc);
+    }
+}
+
+//================================//
+void RenderEngine::ReadTimingQueries()
+{
+    if(!this->wgpuBundle->SupportsTimestampQuery() || this->gpuTimingMapInFlight)
+        return;
+
+    int readBuffer = currentTimingWriteBuffer;
+    currentTimingWriteBuffer = 1 - currentTimingWriteBuffer; // swap
+    this->gpuTimingMapInFlight = true;
+    
+    TimingCtx* ctx = new TimingCtx{this, readBuffer};
+    
+    this->gpuTimingReadbackBuffers[readBuffer].MapAsync(
+        wgpu::MapMode::Read,
+        0,
+        sizeof(uint64_t) * 6,
+        wgpu::CallbackMode::AllowProcessEvents,
+        [](wgpu::MapAsyncStatus status, wgpu::StringView message, TimingCtx* ctx) {
+            if (status == wgpu::MapAsyncStatus::Success)
+            {
+                const uint64_t* timestamps = static_cast<const uint64_t*>(
+                    ctx->engine->gpuTimingReadbackBuffers[ctx->bufferIndex].GetConstMappedRange()
+                );
+                
+                // Convert nanoseconds to milliseconds
+                float uploadMs   = (timestamps[1] - timestamps[0]) / 1'000'000.0f;
+                float raytraceMs = (timestamps[3] - timestamps[2]) / 1'000'000.0f;
+                float blitMs     = (timestamps[5] - timestamps[4]) / 1'000'000.0f;
+                
+                // Update accumulators
+                ctx->engine->gpuFrameUploadAccumulator.push_back(uploadMs);
+                if (ctx->engine->gpuFrameUploadAccumulator.size() > 10)
+                    ctx->engine->gpuFrameUploadAccumulator.erase(ctx->engine->gpuFrameUploadAccumulator.begin());
+                ctx->engine->gpuFrameTimeUploadMs = std::accumulate(
+                    ctx->engine->gpuFrameUploadAccumulator.begin(),
+                    ctx->engine->gpuFrameUploadAccumulator.end(), 0.0f
+                ) / ctx->engine->gpuFrameUploadAccumulator.size();
+                
+                ctx->engine->gpuFrameRayTraceAccumulator.push_back(raytraceMs);
+                if (ctx->engine->gpuFrameRayTraceAccumulator.size() > 10)
+                    ctx->engine->gpuFrameRayTraceAccumulator.erase(ctx->engine->gpuFrameRayTraceAccumulator.begin());
+                ctx->engine->gpuFrameTimeRayTraceMs = std::accumulate(
+                    ctx->engine->gpuFrameRayTraceAccumulator.begin(),
+                    ctx->engine->gpuFrameRayTraceAccumulator.end(), 0.0f
+                ) / ctx->engine->gpuFrameRayTraceAccumulator.size();
+                
+                ctx->engine->gpuFrameBlitAccumulator.push_back(blitMs);
+                if (ctx->engine->gpuFrameBlitAccumulator.size() > 10)
+                    ctx->engine->gpuFrameBlitAccumulator.erase(ctx->engine->gpuFrameBlitAccumulator.begin());
+                ctx->engine->gpuFrameTimeBlitMs = std::accumulate(
+                    ctx->engine->gpuFrameBlitAccumulator.begin(),
+                    ctx->engine->gpuFrameBlitAccumulator.end(), 0.0f
+                ) / ctx->engine->gpuFrameBlitAccumulator.size();
+                
+                ctx->engine->gpuTimingReadbackBuffers[ctx->bufferIndex].Unmap();
+            }
+            
+            ctx->engine->gpuTimingMapInFlight = false;
+            delete ctx;
+        },
+        ctx
+    );
+}
+
+//================================//
+void RenderEngine::ReadFeedbacks()
+{
+    // After submit, request mapping of the feedback buffer we just wrote to
+    // APPARENTLY THIS WILL NOT BLOCK! The callback will fire when the GPU is DONE
+    int feedbackSlot = this->voxelManager->currentFeedbackReadSlot;
+    if (this->voxelManager->feedbackBufferSlots[feedbackSlot].state == BufferState::Available)
+    {
+        this->voxelManager->feedbackBufferSlots[feedbackSlot].state = BufferState::MappingInFlight;
+        
+        FeedbackCtx* ctx = new FeedbackCtx{this->voxelManager.get(), feedbackSlot};
+        size_t bufferSize = sizeof(uint32_t) + MAX_FEEDBACK * sizeof(uint32_t);
+        
+        this->voxelManager->feedbackBufferSlots[feedbackSlot].cpuBuffer.MapAsync(
+            wgpu::MapMode::Read,
+            0,
+            bufferSize,
+            wgpu::CallbackMode::AllowProcessEvents,
+            [](wgpu::MapAsyncStatus status, wgpu::StringView message, FeedbackCtx* ctx) {
+                FeedbackBufferSlot& slot = ctx->vm->feedbackBufferSlots[ctx->slot];
+                
+                if (status == wgpu::MapAsyncStatus::Success)
+                {
+                    const uint8_t* mappedData = static_cast<const uint8_t*>(
+                        slot.cpuBuffer.GetConstMappedRange()
+                    );
+                    
+                    uint32_t count = *reinterpret_cast<const uint32_t*>(mappedData);
+                    count = std::min(count, static_cast<uint32_t>(MAX_FEEDBACK));
+                    
+                    const uint32_t* indices = reinterpret_cast<const uint32_t*>(
+                        mappedData + sizeof(uint32_t)
+                    );
+                    
+                    ctx->vm->feedbackRequests.resize(count);
+                    if (count > 0)
+                    {
+                        memcpy(ctx->vm->feedbackRequests.data(), indices, count * sizeof(uint32_t));
+                    }
+                    
+                    ctx->vm->hasPendingFeedback = true;
+                    
+                    slot.cpuBuffer.Unmap();
+                }
+                
+                slot.state = BufferState::Available;
+                delete ctx;
+            },
+            ctx
+        );
+    }
 }

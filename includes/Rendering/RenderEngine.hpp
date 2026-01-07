@@ -15,6 +15,9 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_wgpu.h"
 
+// forward declarations
+class RenderEngine;
+
 //================================//
 struct RenderInfo
 {
@@ -23,8 +26,6 @@ struct RenderInfo
     double time;
     bool resizeNeeded;
 };
-
-//================================//
 struct VoxelParameters
 {
     Eigen::Matrix4f pixelToRay;
@@ -35,6 +36,15 @@ struct VoxelParameters
     uint32_t hasColor;
     uint32_t _pad;
 };
+struct TimingCtx 
+{
+    RenderEngine* engine;
+    int bufferIndex;
+};
+struct FeedbackCtx {
+    VoxelManager* vm;
+    int slot;
+};
 
 //================================//
 class RenderEngine
@@ -43,7 +53,6 @@ public:
     RenderEngine(WgpuBundle* bundle, int voxelResolution, int maxVisibleBricks)
     {
         std::cout << "[RenderEngine] Initializing Render Engine...\n";
-        // Create Debug Pipeline
         this->wgpuBundle = bundle;
         
         // Create Voxel Manager
@@ -52,6 +61,9 @@ public:
         // Create Camera
         WindowFormat windowFormat = bundle->GetWindowFormat();
         this->camera = std::make_unique<Camera>(Eigen::Vector2f(static_cast<float>(windowFormat.width), static_cast<float>(windowFormat.height)));
+
+        // Initialize GPU Timing Queries
+        this->InitializeGPUTimingQueries();
 
         std::cout << "[RenderEngine] Creating Pipelines...\n";
         CreateRenderPipelineDebug(*this->wgpuBundle, this->debugPipeline);
@@ -93,6 +105,8 @@ private:
     void onResolutionSliderValueChanged(int newResolution);
     void onVisibleBricksSliderValueChanged(int newMaxVisibleBricks);
 
+    void ReadFeedbacks();
+
     void RebuildVoxelPipelineResources(const RenderInfo& renderInfo);
 
     RenderPipelineWrapper debugPipeline;
@@ -123,6 +137,15 @@ private:
     std::vector<float> gpuFrameRayTraceAccumulator;
     std::vector<float> gpuFrameUploadAccumulator;
     std::vector<float> gpuFrameBlitAccumulator;
+
+    wgpu::QuerySet gpuTimingQuerySet;
+    wgpu::Buffer gpuTimingResolveBuffer;
+    wgpu::Buffer gpuTimingReadbackBuffers[2];
+
+    void InitializeGPUTimingQueries();
+    void ReadTimingQueries();
+    bool gpuTimingMapInFlight = false;
+    int currentTimingWriteBuffer = 0;
 };
 
 #endif // RENDER_ENGINE_HPP

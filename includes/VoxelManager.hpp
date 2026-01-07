@@ -172,6 +172,9 @@ public:
     wgpu::Buffer uploadBuffer;
     wgpu::Buffer uploadCountUniform;
 
+    wgpu::Buffer brickRequestFlagsBuffer;
+    wgpu::Buffer brickRequestFlagsRESET;
+
     // pools
     std::array<UploadBufferSlot, NUM_UPLOAD_BUFFERS> uploadBufferSlots;
     int currentUploadSlot = 0;

@@ -3,6 +3,7 @@
 #include <iostream>
 #include <bitset>
 #include <string>
+#include <fstream>
 
 //================================//
 struct UploadMapCallbackContext 
@@ -165,55 +166,6 @@ ColorRGB VoxelManager::computeBrickAverageColor(const BrickMapCPU& brick)
         uint8_t(b / count)
     };
 }
-
-//================================//
-/*
-WE WILL COMPLETE THIS METHOD WITH READ FROM DISK LATER
-void VoxelManager::setVoxel(int x, int y, int z, bool filled, ColorRGB color)
-{
-    int bx = x / 8;
-    int by = y / 8;
-    int bz = z / 8;
-
-    int brickIndex = bx + by * this->BrickResolution + bz * this->BrickResolution * this->BrickResolution;
-    assert(brickIndex >= 0 && brickIndex < static_cast<int>(brickMaps.size()));
-
-    BrickMapCPU& brick = brickMaps[brickIndex];
-
-    int lx = x % 8;
-    int ly = y % 8;
-    int lz = z % 8;
-    int bit = lx + ly * 8;
-
-    int sliceBase = lz * 2;
-
-    if (filled)
-    {
-        // occupancy is now 16 half slices of 32 bits
-        if (bit < 32) {
-            brick.occupancy[sliceBase] |= (1u << bit);
-        } else {
-            brick.occupancy[sliceBase + 1] |= (1u << (bit - 32));
-        }
-        brick.colors[lz * 64 + bit] = color;
-    }
-    else
-    {
-        // todo clear correct bit in first or second half
-        if (bit < 32) {
-            brick.occupancy[sliceBase] &= ~(1u << bit);
-        } else {
-            brick.occupancy[sliceBase + 1] &= ~(1u << (bit - 32));
-        }
-        brick.colors[lz * 64 + bit] = {0,0,0};
-    }
-
-    brick.lodColor = computeBrickAverageColor(brick); // Recompute LOD color average
-    if (brick.dirty == false)
-        dirtyBrickIndices.push_back(brickIndex); // Do not push if already dirty
-    brick.dirty = true;
-}
-*/
 
 //================================//
 void VoxelManager::startOfFrame()
@@ -646,27 +598,43 @@ void VoxelManager::initDynamicBuffers(WgpuBundle& wgpuBundle)
     this->brickGridCPU.resize(numBricks);
     this->freeBrickSlots.resize(numVisibleBricks);
 
+    // If loaded file, and matching resolution, get info on bricks here
+    std::vector<brickIndexEntry> loadedBricks;
+    bool matchingResolution = false;
+    if (this->loadedMesh)
+    {
+        this->voxelFileReader->getInitialOccupiedBricks(loadedBricks);
+        matchingResolution = (this->voxelFileReader->getResolution() == this->voxelResolution);
+    }
+
     for(uint32_t i = 0; i < this->brickGrid.size(); ++i)
     {
-        // Pack based on X, Y, Z color cube
-        int denom = BrickResolution == 1 ? 1 : BrickResolution - 1;
-        ColorRGB color = {
-            static_cast<uint8_t>((i % BrickResolution) * 255 / denom),
-            static_cast<uint8_t>(((i / BrickResolution) % BrickResolution) * 255 / denom),
-            static_cast<uint8_t>((i / (BrickResolution * BrickResolution)) * 255 / denom)
-        };
-
-        this->brickGrid[i].pointer = PackLOD(color); // Initially all bricks are unloaded
+        this->brickGrid[i].pointer = PackEmptyPointer();
 
         BrickGridCellCPU& cell = this->brickGridCPU[i];
         cell.dirty = false;
         cell.onGPU = false;
         cell.gpuBrickIndex = UINT32_MAX;
-        cell.LODColor = color;
+        cell.LODColor = {0,0,0};
     }
     for (uint32_t i = 0; i < numVisibleBricks; ++i)
     {
         freeBrickSlots[i] = numVisibleBricks - 1 - i;
+    }
+
+    if (matchingResolution)
+    {
+        for (const brickIndexEntry& entry : loadedBricks)
+        {
+            if (entry.brickGridIndex >= numBricks)
+                continue;
+
+            ColorRGB lod = {entry.LOD_R, entry.LOD_G, entry.LOD_B};
+            this->brickGrid[entry.brickGridIndex].pointer = PackLOD(lod);
+
+            BrickGridCellCPU& cell = this->brickGridCPU[entry.brickGridIndex];
+            cell.LODColor = lod;
+        }
     }
 
     // GPU storage initialization
@@ -781,4 +749,21 @@ void VoxelManager::createUploadBindGroup(RenderPipelineWrapper& pipelineWrapper,
     bindGroupDesc.entries = entries;
 
     pipelineWrapper.bindGroup = wgpuBundle.GetDevice().CreateBindGroup(&bindGroupDesc);
+}
+
+//================================//
+void VoxelManager::loadFile(const std::string& filename)
+{
+    // Does file exist?
+    std::ifstream fileCheck(filename, std::ios::binary);
+    if (!fileCheck)
+    {
+        std::cout << "[VoxelManager] Voxel file " << filename << " does not exist." << std::endl;
+        return;
+    }
+
+    this->voxelFileReader = std::make_unique<VoxelFileReader>(filename);
+    this->loadedMesh = true;
+
+    std::cout << "[VoxelManager] Voxel file " << filename << " loaded. Resolution: " << this->voxelFileReader->getResolution() << std::endl;
 }

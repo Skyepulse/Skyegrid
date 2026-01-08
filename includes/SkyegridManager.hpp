@@ -12,6 +12,20 @@ public:
     ~SkyegridManager();
 
     void RunMainLoop();
+    void InitGraphics()
+    {
+        if (this->renderEngine)
+        {
+            this->renderEngine->Initialize();
+        }
+    }
+    void LoadVoxelFile(const std::string& filename)
+    {
+        if (this->renderEngine)
+        {
+            this->renderEngine->loadFile(filename);
+        }
+    }
     
 private:
     void ProcessEvents(float deltaTime);

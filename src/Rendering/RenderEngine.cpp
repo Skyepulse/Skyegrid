@@ -26,6 +26,13 @@ void RenderEngine::InitImGui()
     init_info.NumFramesInFlight = 3;
     init_info.RenderTargetFormat = WGPUTextureFormat_BGRA8Unorm;
 
+    this->resolutionSliderValue = this->voxelManager->GetVoxelResolution();
+    this->previousResolutionValue = this->resolutionSliderValue;
+    this->visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
+    this->previousVisibleBricksValue = this->visibleBricksSliderValue;
+    this->resolutionDigitBoxValue = this->resolutionSliderValue;
+    this->visibleBricksDigitBoxValue = this->visibleBricksSliderValue;
+
     ImGui_ImplWGPU_Init(&init_info);
     std::cout << "[RenderEngine] ImGui initialized successfully.\n";
 }
@@ -42,45 +49,25 @@ void RenderEngine::RenderImGui(wgpu::RenderPassEncoder& pass)
     ImGui::Text("Voxel Resolution: %d", this->GetVoxelResolution());
     ImGui::Separator();
 
+    ImGui::InputInt("##VoxelResolutionInput", &resolutionDigitBoxValue);
+    if (ImGui::IsItemDeactivatedAfterEdit() && resolutionDigitBoxValue != previousResolutionValue)
+        onResolutionValueChanged(resolutionDigitBoxValue);
+
     ImGui::SliderInt("Voxel resolution", &resolutionSliderValue, 1, 2048);
-    if (ImGui::IsItemDeactivatedAfterEdit())
-    {
-        if (resolutionSliderValue != previousResolutionSliderValue)
-        {
-            // Change only resolution
-            this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, resolutionSliderValue);
-            resolutionSliderValue = this->voxelManager->GetVoxelResolution();
-            visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
-
-            // recreate bind groups (needed)
-            this->resizePending = true;
-            this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
-
-            previousResolutionSliderValue = resolutionSliderValue;
-        }
-    }
+    if (ImGui::IsItemDeactivatedAfterEdit() && resolutionSliderValue != previousResolutionValue)
+        onResolutionValueChanged(resolutionSliderValue);
 
     ImGui::Separator();
     ImGui::Text("Max Visible Bricks: %d", this->voxelManager->GetMaxVisibleBricks());
     ImGui::Separator();
 
+    ImGui::InputInt("##MaxVisibleBricksInput", &visibleBricksDigitBoxValue);
+    if (ImGui::IsItemDeactivatedAfterEdit() && visibleBricksDigitBoxValue != previousVisibleBricksValue)
+        onVisibleBricksValueChanged(visibleBricksDigitBoxValue);
+
     ImGui::SliderInt("Max Visible Bricks", &visibleBricksSliderValue, 1, 3000000);
-    if (ImGui::IsItemDeactivatedAfterEdit())
-    {
-        if (visibleBricksSliderValue != previousVisibleBricksSliderValue)
-        {
-            // Change only max visible bricks
-            this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, this->GetVoxelResolution(), visibleBricksSliderValue);
-            visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
-            resolutionSliderValue = this->voxelManager->GetVoxelResolution();
-
-            // recreate bind groups (needed)
-            this->resizePending = true;
-            this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
-
-            previousVisibleBricksSliderValue = visibleBricksSliderValue;
-        }
-    }
+    if (ImGui::IsItemDeactivatedAfterEdit() && visibleBricksSliderValue != previousVisibleBricksValue)
+        onVisibleBricksValueChanged(visibleBricksSliderValue);
 
     ImGui::Separator();
     ImGui::Text("CPU Frame Time: %.3f ms", this->cpuFrameTimeMS);
@@ -95,6 +82,40 @@ void RenderEngine::RenderImGui(wgpu::RenderPassEncoder& pass)
 
     ImGui::Render();
     ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass.Get());
+}
+
+//================================//
+void RenderEngine::onResolutionValueChanged(int newResolution)
+{
+    // Change only resolution
+    this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, newResolution);
+    this->resolutionSliderValue = this->voxelManager->GetVoxelResolution();
+    this->visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
+    this->visibleBricksDigitBoxValue = this->visibleBricksSliderValue;
+    this->resolutionDigitBoxValue = this->resolutionSliderValue;
+
+    // recreate bind groups (needed)
+    this->resizePending = true;
+    this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
+
+    this->previousResolutionValue = newResolution;
+}
+
+//================================//
+void RenderEngine::onVisibleBricksValueChanged(int newMaxVisibleBricks)
+{
+    // Change only max visible bricks
+    this->voxelManager->ChangeVoxelResolution(*this->wgpuBundle, this->GetVoxelResolution(), newMaxVisibleBricks);
+    this->visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
+    this->resolutionSliderValue = this->voxelManager->GetVoxelResolution();
+    this->visibleBricksDigitBoxValue = this->visibleBricksSliderValue;
+    this->resolutionDigitBoxValue = this->resolutionSliderValue;
+
+    // recreate bind groups (needed)
+    this->resizePending = true;
+    this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
+
+    this->previousVisibleBricksValue = newMaxVisibleBricks;
 }
 
 //================================//

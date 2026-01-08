@@ -3,6 +3,7 @@
 
 #include "../includes/Rendering/Pipelines/pipelines.hpp"
 #include "../includes/constants.hpp"
+#include "../includes/Voxelizer.hpp"
 #include <cstdint>
 #include <vector>
 #include <array>
@@ -121,7 +122,6 @@ public:
     void prepareFeedback(const wgpu::Queue& queue, const wgpu::CommandEncoder& encoder);
     void processAsyncOperations(wgpu::Instance& instance);
 
-    void setVoxel(int x, int y, int z, bool filled, ColorRGB color);
     void initDynamicBuffers(WgpuBundle& wgpuBundle);
     void initStaticBuffers(WgpuBundle& wgpuBundle);
     void createUploadBindGroup(RenderPipelineWrapper& pipelineWrapper, WgpuBundle& wgpuBundle);
@@ -153,6 +153,8 @@ public:
         
         initDynamicBuffers(bundle);
     }
+
+    void loadFile(const std::string& filename);
 
     //CPU storage
     std::vector<BrickGridCell> brickGrid;
@@ -209,6 +211,9 @@ private:
     int maxVisibleBricks;
 
     bool hasColor = false;
+
+    std::unique_ptr<VoxelFileReader> voxelFileReader;
+    bool loadedMesh = false;
 };
 
 #endif 

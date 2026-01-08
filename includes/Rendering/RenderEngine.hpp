@@ -61,7 +61,17 @@ public:
         // Create Camera
         WindowFormat windowFormat = bundle->GetWindowFormat();
         this->camera = std::make_unique<Camera>(Eigen::Vector2f(static_cast<float>(windowFormat.width), static_cast<float>(windowFormat.height)));
+    }
+    ~RenderEngine()
+    {
+        // ImGUI Cleanup
+        ImGui_ImplWGPU_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+    }
 
+    void Initialize()
+    {
         // Initialize GPU Timing Queries
         this->InitializeGPUTimingQueries();
 
@@ -77,23 +87,16 @@ public:
         this->voxelManager->initDynamicBuffers(*this->wgpuBundle);
         this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 
-        this->resolutionSliderValue = this->voxelManager->GetVoxelResolution();
-        this->previousResolutionSliderValue = this->resolutionSliderValue;
-        this->visibleBricksSliderValue = this->voxelManager->GetMaxVisibleBricks();
-        this->previousVisibleBricksSliderValue = this->visibleBricksSliderValue;
         InitImGui();
         std::cout << "[RenderEngine] Render Engine initialized successfully.\n";
-    }
-    ~RenderEngine()
-    {
-        // ImGUI Cleanup
-        ImGui_ImplWGPU_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
     }
 
     void Render(void* userData);
     void RenderDebug(void* userData);
+    void loadFile(const std::string& filename)
+    {
+        this->voxelManager->loadFile(filename);
+    }
 
     Camera* GetCamera() { return this->camera.get(); }
     int GetVoxelResolution() const { return this->voxelManager->GetVoxelResolution(); }
@@ -102,8 +105,8 @@ private:
 
     void InitImGui();
     void RenderImGui(wgpu::RenderPassEncoder& pass);
-    void onResolutionSliderValueChanged(int newResolution);
-    void onVisibleBricksSliderValueChanged(int newMaxVisibleBricks);
+    void onResolutionValueChanged(int newResolution);
+    void onVisibleBricksValueChanged(int newMaxVisibleBricks);
 
     void ReadFeedbacks();
 
@@ -123,9 +126,11 @@ private:
 
     // ImGUI
     int resolutionSliderValue = -1;
-    int previousResolutionSliderValue = -1;
+    int previousResolutionValue = -1;
     int visibleBricksSliderValue = -1;
-    int previousVisibleBricksSliderValue = -1;
+    int previousVisibleBricksValue = -1;
+    int resolutionDigitBoxValue = -1;
+    int visibleBricksDigitBoxValue = -1;
 
     // Timing info
     float cpuFrameTimeMS = 0.0f;

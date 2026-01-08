@@ -10,18 +10,22 @@
 WgpuBundle::WgpuBundle(WindowFormat windowFormat) : window(windowFormat.window), currentWidth(windowFormat.width), currentHeight(windowFormat.height)
 {
     this->InitializeInstance();
-    this->surface = wgpu::glfw::CreateSurfaceForWindow(this->instance, window);
 
-    // Callback on window resize
-    glfwSetWindowUserPointer(window, this);
-    glfwSetFramebufferSizeCallback(
-        window,
-        [](GLFWwindow* wnd, int width, int height)
-        {
-            WgpuBundle* bundle = static_cast<WgpuBundle*>(glfwGetWindowUserPointer(wnd));
-            bundle->Resize(width, height);
-        }
-    );
+    if (this->window != nullptr)
+    {
+        this->surface = wgpu::glfw::CreateSurfaceForWindow(this->instance, window);
+
+        // Callback on window resize
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(
+            window,
+            [](GLFWwindow* wnd, int width, int height)
+            {
+                WgpuBundle* bundle = static_cast<WgpuBundle*>(glfwGetWindowUserPointer(wnd));
+                bundle->Resize(width, height);
+            }
+        );
+    }
 
     this->InitializeGraphics();
 }
@@ -94,6 +98,9 @@ void WgpuBundle::InitializeGraphics()
 //================================//
 void WgpuBundle::ConfigureSurface()
 {
+    if (!this->surface)
+        return;
+        
     wgpu::SurfaceCapabilities capabilities;
     surface.GetCapabilities(adapter, &capabilities);
     swapchainFormat = capabilities.formats[0];

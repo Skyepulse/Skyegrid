@@ -8,7 +8,7 @@ if(POLICY CMP0169)
 endif()
 
 set(SRC_FILES
-  main.cpp
+  skyegrid.cpp
   includes/Rendering/wgpuBundle.hpp
   src/Rendering/wgpuBundle.cpp
   includes/Rendering/wgpuHelpers.hpp
@@ -28,7 +28,20 @@ set(SRC_FILES
   src/Voxelizer.cpp
 )
 
+set(VOXELIZER_SRC_FILES
+  main_voxelize.cpp
+  includes/Voxelizer.hpp
+  includes/Rendering/wgpuHelpers.hpp
+  src/Rendering/wgpuHelpers.cpp
+  src/Voxelizer.cpp
+  src/Rendering/wgpuBundle.cpp
+  includes/Rendering/wgpuBundle.hpp
+  includes/Rendering/Pipelines/pipelines.hpp
+  src/Rendering/Pipelines/pipelines.cpp
+)
+
 add_executable(Skyegrid ${SRC_FILES})
+add_executable(Voxelizer ${VOXELIZER_SRC_FILES})
 
 include(FetchContent)
 
@@ -47,6 +60,8 @@ FetchContent_Declare(
   GIT_TAG        v1.92.5
 )
 FetchContent_MakeAvailable(imgui)
+
+# SKYEGRID CONFIGURATION
 
 set(IMGUI_DIR ${imgui_SOURCE_DIR})
 set(IMGUI_SOURCES
@@ -70,7 +85,15 @@ target_include_directories(Skyegrid PRIVATE
     ${CMAKE_SOURCE_DIR}/includes
 )
 
-# Dawn specifics
+# VOXELIZER CONFIGURATION
+target_include_directories(Voxelizer PRIVATE 
+    ${CMAKE_SOURCE_DIR}/includes
+    ${stb_SOURCE_DIR}  # For stb_image.h
+)
+target_link_libraries(Voxelizer PRIVATE igl::core)
+
+# DAWN SPECIFICS
+
 set(DAWN_ROOT "${CMAKE_SOURCE_DIR}/dawn")
 set(DAWN_FETCH_DEPENDENCIES ON CACHE BOOL "" FORCE) # Fetch all dawn dependencies
 set(DAWN_USE_BUILT_DXC ON CACHE BOOL "" FORCE)
@@ -96,6 +119,15 @@ else()
 
   target_link_libraries(
           Skyegrid
+          PRIVATE
+      webgpu_dawn
+      webgpu_glfw
+      glfw
+      igl::core
+  )
+
+  target_link_libraries(
+          Voxelizer
           PRIVATE
       webgpu_dawn
       webgpu_glfw

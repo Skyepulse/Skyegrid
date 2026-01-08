@@ -349,9 +349,123 @@ void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
 
     // Bind Group Layout
+    wgpu::BindGroupLayoutEntry entries[7]{};
+
+    // uniform
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
+
+    // vertex buffer
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // triangle buffer
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // Texture view
+    entries[3].binding = 3;
+    entries[3].visibility = wgpu::ShaderStage::Compute;
+    entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[3].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+    entries[3].texture.multisampled = false;
+
+    // Texture sampler
+    entries[4].binding = 4;
+    entries[4].visibility = wgpu::ShaderStage::Compute;
+    entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
+
+    // occupancy buffer
+    entries[5].binding = 5;
+    entries[5].visibility = wgpu::ShaderStage::Compute;
+    entries[5].buffer.type = wgpu::BufferBindingType::Storage;
+
+    // dense colors buffer
+    entries[6].binding = 6;
+    entries[6].visibility = wgpu::ShaderStage::Compute;
+    entries[6].buffer.type = wgpu::BufferBindingType::Storage;
+
+    wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
+    bindGroupLayoutDesc.entryCount = 7;
+    bindGroupLayoutDesc.entries = entries;
+    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+
+    // Pipeline Layout
+    wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
+    pipelineLayoutDesc.bindGroupLayoutCount = 1;
+    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
+
+    // Compute Pipeline
+    wgpu::ComputePipelineDescriptor computePipelineDesc{};
+    computePipelineDesc.layout = pipelineWrapper.pipelineLayout;
+    computePipelineDesc.compute.module = pipelineWrapper.shaderModule;
+    computePipelineDesc.compute.entryPoint = "c";
+    pipelineWrapper.computePipeline = wgpuBundle.GetDevice().CreateComputePipeline(&computePipelineDesc);
+
+    pipelineWrapper.init = 1;
+    pipelineWrapper.AssertConsistent();
+}
+
+//================================//
+void CreateCompactVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
+{
+    pipelineWrapper.isCompute = true;
+
+    // SHADER 
+    std::string shaderCode;
+    if (getShaderCodeFromFile("Shaders/computeCompactVoxel.wgsl", shaderCode) < 0)
+    {
+        throw std::runtime_error(
+            "[PIPELINES] Failed to load compute compact voxel shader code from path: " +
+            (getExecutableDirectory() / "Shaders/computeCompactVoxel.wgsl").string()
+        );
+    }
+
+    wgpu::ShaderSourceWGSL wgsl{};
+    wgsl.code = shaderCode.c_str();
+
+    wgpu::ShaderModuleDescriptor shaderModuleDesc{};
+    shaderModuleDesc.nextInChain = &wgsl;
+    shaderModuleDesc.label = "ComputeCompactVoxelShaderModule";
+
+    pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
+
+    // Bind Group Layout
     wgpu::BindGroupLayoutEntry entries[6]{};
 
-    // TODO CONTINUE
+    // uniform
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
+
+    // occupancy buffer
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // dense colors buffer
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    // brick outputs buffer
+    entries[3].binding = 3;
+    entries[3].visibility = wgpu::ShaderStage::Compute;
+    entries[3].buffer.type = wgpu::BufferBindingType::Storage;
+
+    // packed colors buffer
+    entries[4].binding = 4;
+    entries[4].visibility = wgpu::ShaderStage::Compute;
+    entries[4].buffer.type = wgpu::BufferBindingType::Storage;
+
+    // counters buffer (atomics)
+    entries[5].binding = 5;
+    entries[5].visibility = wgpu::ShaderStage::Compute;
+    entries[5].buffer.type = wgpu::BufferBindingType::Storage;
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 6;
@@ -370,7 +484,7 @@ void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     computePipelineDesc.compute.module = pipelineWrapper.shaderModule;
     computePipelineDesc.compute.entryPoint = "c";
     pipelineWrapper.computePipeline = wgpuBundle.GetDevice().CreateComputePipeline(&computePipelineDesc);
-
+    
     pipelineWrapper.init = 1;
     pipelineWrapper.AssertConsistent();
 }

@@ -1,6 +1,5 @@
 #include <iostream>
 #include "includes/SkyegridManager.hpp"
-#include "includes/Voxelizer.hpp"
 #include <charconv>
 
 const int voxel_resolution =  512;
@@ -42,10 +41,10 @@ int main(int argc, char** argv)
         }
     }
 
-    // SkyegridManager manager(false, value1, value2);
-    Voxelizer voxelizer;
-    // manager.RunMainLoop();
-    voxelizer.loadMesh("meshes/WallE.ply");
+    SkyegridManager manager(false, value1, value2);
+    manager.LoadVoxelFile("data/output_voxel.vox");
+    manager.InitGraphics();
+    manager.RunMainLoop();
 
     std::cout << "Exiting application.\n";
     return 0;

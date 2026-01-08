@@ -1,11 +1,14 @@
 #ifndef VOXELIZER_HPP
 #define VOXELIZER_HPP
 
+#include "Rendering/wgpuBundle.hpp"
+#include "Rendering/Pipelines/pipelines.hpp"
 #include <Eigen/Core>
 #include <algorithm>
 #include <vector>
 #include <fstream>
 #include <string>
+#include <bit>
 
 // Forward declarations
 class VoxelFileWriter;
@@ -37,7 +40,7 @@ struct brickIndexEntry
     uint32_t reserved; // Padding
 };
 
-struct ColorRGB
+struct VoxelColorRGB
 {
     uint8_t r;
     uint8_t g;
@@ -47,7 +50,32 @@ struct ColorRGB
 struct brickDataEntry
 {
     uint32_t occupancy[16]; // 8 slices of 8x8 occupancy
-    std::vector<ColorRGB> colors;
+    std::vector<VoxelColorRGB> colors;
+};
+
+//================================//
+struct VoxelizerUniforms
+{
+    uint32_t voxelResolution;
+    uint32_t brickResolution;
+    float    voxelSize;
+    uint32_t numTriangles;
+    float    meshMinBounds[3];
+    uint32_t _pad;
+};
+
+struct Vertex
+{
+    float position[3];
+    float uv[2];
+    float normal[3];
+    float padding;
+};
+
+struct Triangle
+{
+    uint32_t indices[3];
+    uint32_t _pad;
 };
 
 //================================//
@@ -59,9 +87,13 @@ public:
 
     bool loadMesh(const std::string& filename, const std::string& texturePath = "");
     bool voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelResolution);
-    Eigen::Vector3f sampleTexture(float u, float v) const;
 
 private:
+
+    void initializeGpuResources(uint32_t voxelResolution);
+
+    std::unique_ptr<WgpuBundle> gpuBundle;
+
     Eigen::MatrixXd vertices;
     Eigen::MatrixXi faces;
     Eigen::MatrixXi edges;
@@ -71,6 +103,28 @@ private:
     bool hasTexture = false;
     unsigned char* textureData = nullptr;
     int texWidth, texHeight, texChannels;
+
+    double meshWidth; // x axis extent
+    double meshHeight; // y axis extent
+    double meshDepth; // z axis extent
+    Eigen::Vector3d meshMinBounds;
+    Eigen::Vector3d meshMaxBounds;
+
+    // GPU resources
+    wgpu::Buffer vertexBuffer;
+    wgpu::Buffer triangleBuffer;
+    wgpu::Buffer occupancyBuffer;
+    wgpu::Buffer denseColorsBuffer;
+    wgpu::Texture texture;
+    wgpu::TextureView textureView;
+    wgpu::Sampler textureSampler;
+
+    wgpu::Buffer brickOutputBuffer;
+    wgpu::Buffer packedColorBuffer;
+    wgpu::Buffer countersBuffer;
+
+    RenderPipelineWrapper voxelizationPipeline;
+    RenderPipelineWrapper compactVoxelPipeline;
 };
 
 //================================//
@@ -96,7 +150,7 @@ public:
         file.write(reinterpret_cast<const char*>(&header), sizeof(VoxelFileHeader));
     }
 
-    void AddBrick(uint32_t brickGridIndex, const uint32_t occupancy[16], const std::vector<ColorRGB>& colors, ColorRGB lodColor, uint8_t FLAGS=0)
+    void AddBrick(uint32_t brickGridIndex, const uint32_t occupancy[16], const std::vector<VoxelColorRGB>& colors, VoxelColorRGB lodColor, uint8_t FLAGS=0)
     {
         brickIndexEntry indexEntry;
         indexEntry.brickGridIndex = brickGridIndex;
@@ -217,13 +271,20 @@ public:
 
         uint32_t occupiedVoxels = 0;
         for (int i = 0; i < 16; ++i)
-            occupiedVoxels += std::popcount(outData.occupancy[i]);
+            occupiedVoxels += std::popcount(outData.occupancy[i]); // per documentation in C++20, counts the number of set bits in an integer
 
         outData.colors.resize(occupiedVoxels);
         file.read(reinterpret_cast<char*>(outData.colors.data()), occupiedVoxels * 3);
 
         return true;
     }
+
+    void getInitialOccupiedBricks(std::vector<brickIndexEntry>& outBricks) const
+    {
+        outBricks = brickIndex;
+    }
+
+    uint32_t getResolution() const { return header.resolution; }
     
 private:
     // we use mutable because seekg changes internal state of file stream

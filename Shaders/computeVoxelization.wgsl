@@ -14,9 +14,11 @@ struct Uniforms {
 
 struct Vertex {
     position: vec3<f32>,
-    uv: vec2<f32>,
-    normal: vec3<f32>,
     _pad: f32,
+    uv: vec2<f32>,
+    _pad2: vec2<f32>,
+    normal: vec3<f32>,
+    _pad3: f32,
 }
 
 struct Triangle {
@@ -140,57 +142,97 @@ fn barycentric(p: vec3<f32>, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> vec
 
 @compute @workgroup_size(64)
 fn c(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let triIndex = gid.x;
-    if (triIndex >= uniforms.numTriangles) { return; }
-    
-    let tri = triangles[triIndex];
-    let v0 = vertices[tri.indices.x];
-    let v1 = vertices[tri.indices.y];
-    let v2 = vertices[tri.indices.z];
-    
-    let p0 = v0.position;
-    let p1 = v1.position;
-    let p2 = v2.position;
-    
-    // Compute triangle AABB in voxel space
-    let minWorld = min(min(p0, p1), p2);
-    let maxWorld = max(max(p0, p1), p2);
-    
-    let minVoxelF = (minWorld - uniforms.meshMinBounds) / uniforms.voxelSize;
-    let maxVoxelF = (maxWorld - uniforms.meshMinBounds) / uniforms.voxelSize;
-    
-    let minVoxel = vec3<u32>(max(vec3<i32>(floor(minVoxelF)), vec3<i32>(0)));
-    let maxVoxel = vec3<u32>(min(vec3<i32>(ceil(maxVoxelF)), vec3<i32>(i32(uniforms.voxelResolution) - 1)));
-    
-    let halfSize = vec3<f32>(uniforms.voxelSize * 0.5);
-    
-    // Iterate over potential voxels
-    for (var z = minVoxel.z; z <= maxVoxel.z; z++) {
-        for (var y = minVoxel.y; y <= maxVoxel.y; y++) {
-            for (var x = minVoxel.x; x <= maxVoxel.x; x++) {
-                let voxel = vec3<u32>(x, y, z);
-                let voxelCenter = uniforms.meshMinBounds + (vec3<f32>(voxel) + 0.5) * uniforms.voxelSize;
-                
-                if (triangleAABBIntersect(p0, p1, p2, voxelCenter, halfSize)) {
-                    // Mark occupancy
-                    let indices = voxelToBrickIndices(voxel);
-                    if (indices.x == 0xFFFFFFFFu) {
-                        continue; // Out of range
+    let localBrickIndex = gid.x;
+    let bricksThisPass = uniforms.brickEnd - uniforms.brickStart;
+    if (localBrickIndex >= bricksThisPass) {
+        return;
+    }
+
+    // Convert local brick index to global brick coordinates
+    let globalBrickIndex = uniforms.brickStart + localBrickIndex;
+
+    let bricksPerRow = uniforms.brickResolution;
+    let brickZ = globalBrickIndex / (bricksPerRow * bricksPerRow);
+    let brickY = (globalBrickIndex / bricksPerRow) % bricksPerRow;
+    let brickX = globalBrickIndex % bricksPerRow;
+
+    // Brick bounds in voxel space
+    let brickVoxelBase = vec3<u32>(brickX, brickY, brickZ) * 8u;
+    let brickVoxelMax  = brickVoxelBase + vec3<u32>(7u);
+
+    // Brick bounds in world space
+    let brickMinWorld =
+        uniforms.meshMinBounds +
+        vec3<f32>(brickVoxelBase) * uniforms.voxelSize;
+
+    let brickMaxWorld =
+        uniforms.meshMinBounds +
+        (vec3<f32>(brickVoxelMax) + 1.0) * uniforms.voxelSize;
+
+    let halfVoxel = uniforms.voxelSize * 0.5;
+
+    // Iterate triangles
+    for (var triIndex = 0u; triIndex < uniforms.numTriangles; triIndex++) {
+        let tri = triangles[triIndex];
+
+        let v0 = vertices[tri.indices.x];
+        let v1 = vertices[tri.indices.y];
+        let v2 = vertices[tri.indices.z];
+
+        let p0 = v0.position;
+        let p1 = v1.position;
+        let p2 = v2.position;
+
+        // Triangle AABB in world space
+        let triMin = min(min(p0, p1), p2);
+        let triMax = max(max(p0, p1), p2);
+
+        // Early reject: triangle does not touch this brick
+        if (triMax.x < brickMinWorld.x || triMin.x > brickMaxWorld.x ||
+            triMax.y < brickMinWorld.y || triMin.y > brickMaxWorld.y ||
+            triMax.z < brickMinWorld.z || triMin.z > brickMaxWorld.z) {
+            continue;
+        }
+
+        // Iterate voxels inside this brick only
+        for (var z = 0u; z < 8u; z++) {
+            for (var y = 0u; y < 8u; y++) {
+                for (var x = 0u; x < 8u; x++) {
+                    let voxel = brickVoxelBase + vec3<u32>(x, y, z);
+                    let voxelCenter =
+                        uniforms.meshMinBounds +
+                        (vec3<f32>(voxel) + 0.5) * uniforms.voxelSize;
+
+                    if (!triangleAABBIntersect(
+                            p0, p1, p2,
+                            voxelCenter,
+                            vec3<f32>(halfVoxel))) {
+                        continue;
                     }
-                    setOccupancy(indices.x, indices.y);
-                    
-                    // Sample color at voxel center
+
+                    let localVoxelIndex = x + y * 8u + z * 64u;
+
+                    // Occupancy
+                    let wordIndex =
+                        localBrickIndex * 16u + (localVoxelIndex / 32u);
+                    let bitIndex = localVoxelIndex % 32u;
+                    atomicOr(&occupancy[wordIndex], 1u << bitIndex);
+
+                    // Sample color
                     let bary = barycentric(voxelCenter, p0, p1, p2);
                     let uv = bary.x * v0.uv + bary.y * v1.uv + bary.z * v2.uv;
-                    let texColor = textureSampleLevel(meshTexture, meshSampler, uv, 0.0);
-                    
+                    let texColor =
+                        textureSampleLevel(meshTexture, meshSampler, uv, 0.0);
+
                     let r = u32(clamp(texColor.r * 255.0, 0.0, 255.0));
                     let g = u32(clamp(texColor.g * 255.0, 0.0, 255.0));
                     let b = u32(clamp(texColor.b * 255.0, 0.0, 255.0));
-                    
-                    // Store color (last write wins - acceptable for voxelization)
-                    let linearIdx = voxelToLinear(voxel);
-                    atomicStore(&denseColors[linearIdx], packColor(r, g, b));
+
+                    let localDenseIdx =
+                        localBrickIndex * 512u + localVoxelIndex;
+                    atomicStore(
+                        &denseColors[localDenseIdx],
+                        packColor(r, g, b));
                 }
             }
         }

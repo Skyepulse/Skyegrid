@@ -96,7 +96,13 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     else
     {
         std::string defaultTexturePath = filename.substr(0, filename.find_last_of('.')) + ".png";
-        this->hasTexture = safeTextureLoad(defaultTexturePath, &this->textureData, &this->texWidth, &this->texHeight, &this->texChannels);
+        bool success = this->hasTexture = safeTextureLoad(defaultTexturePath, &this->textureData, &this->texWidth, &this->texHeight, &this->texChannels);
+
+        if (!success)
+        {
+            defaultTexturePath = filename.substr(0, filename.find_last_of('.')) + ".jpg";
+            this->hasTexture = safeTextureLoad(defaultTexturePath, &this->textureData, &this->texWidth, &this->texHeight, &this->texChannels);
+        }
     }
 
     if (this->hasTexture)
@@ -196,7 +202,7 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
 
     // [4] Dense Colors
     bufferDesc.size = sizeof(uint32_t) * maxBricksPerPass * 512;
-    bufferDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc;
+    bufferDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst;
     bufferDesc.mappedAtCreation = false;
     bufferDesc.label = "Dense Colors Buffer";
     this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->denseColorsBuffer);
@@ -223,6 +229,29 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
     this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->countersBuffer);
     uint32_t counterZeros[2] = {0, 0};
     queue.WriteBuffer(this->countersBuffer, 0, counterZeros, sizeof(counterZeros));
+
+    //[8] readback buffers, at worst case scenario size initialization with maxBricksPerPass
+    bufferDesc.size = sizeof(uint32_t) * 2;
+    bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    bufferDesc.mappedAtCreation = false;
+    bufferDesc.label = "Counter Readback Buffer";
+    this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->counterReadbackBuffer);
+
+    bufferDesc.size = sizeof(uint32_t) * 16 * maxBricksPerPass;
+    bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    bufferDesc.mappedAtCreation = false;
+    bufferDesc.label = "Occupancy Readback Buffer";
+    this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->occupancyReadbackBuffer);
+
+    uint32_t occupiedBrickCount = maxBricksPerPass;
+    bufferDesc.size = sizeof(BrickOutput) * occupiedBrickCount;
+    bufferDesc.label = "Brick Output Readback Buffer";
+    this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->brickOutputReadbackBuffer);
+
+    uint32_t totalColorCount = maxBricksPerPass * 512;
+    bufferDesc.size = sizeof(uint32_t) * totalColorCount;;
+    bufferDesc.label = "Packed Color Readback Buffer";
+    this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->packedColorReadbackBuffer);
 
     // [8] texture, texture view, sampler
     if (this->hasTexture && this->textureData)
@@ -370,23 +399,11 @@ void Voxelizer::checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPas
     }
 
     uint64_t totalBricks = static_cast<uint64_t>(brickResolution) * brickResolution * brickResolution;
-    uint64_t totalColorBufferSize = totalBricks * colorBytesPerBrick;
-    if(totalColorBufferSize > maxColorBufferSize)
-    {
-        maxBricksPerPass = static_cast<uint32_t>(maxColorBufferSize / colorBytesPerBrick);
-        std::cout << "[Voxelizer] Warning: Voxel resolution too high for available GPU memory, max bricks per pass set to " <<
-            maxBricksPerPass << " (" << (maxBricksPerPass * 8) << "^3 voxels)" << std::endl;
-        numPasses = static_cast<uint8_t>((totalBricks + maxBricksPerPass - 1) / maxBricksPerPass);
-        std::cout << "[Voxelizer] Voxelization will be performed in " << static_cast<uint32_t>(numPasses) << " passes." << std::endl;
-    }
-    else
-    {
-        maxBricksPerPass = static_cast<uint32_t>(totalBricks);
-        std::cout << "[Voxelizer] Voxelization can proceed with " << maxBricksPerPass << " bricks in only one pass." << std::endl;
-        numPasses = 1;
-    }
+    const uint64_t maxPassBricksValue = 13824;
 
-
+    //uint64_t totalColorBufferSize = totalBricks * colorBytesPerBrick;
+    maxBricksPerPass = std::min(maxPassBricksValue, totalBricks);
+    numPasses = static_cast<uint8_t>((totalBricks + maxBricksPerPass - 1) / maxBricksPerPass);
 }
 
 //================================//
@@ -413,12 +430,39 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
 
     VoxelFileWriter writer(outputVoxelFile, voxelResolution);
 
+    // Uniform
+    VoxelizerUniforms uniforms;
+    uniforms.voxelResolution = voxelResolution;
+    uniforms.brickResolution = voxelResolution / 8;
+    uniforms.voxelSize = voxelSize;
+    uniforms.numTriangles = static_cast<uint32_t>(this->faces.rows());
+    uniforms.meshMinBounds[0] = static_cast<float>(this->meshMinBounds.x());
+    uniforms.meshMinBounds[1] = static_cast<float>(this->meshMinBounds.y());
+    uniforms.meshMinBounds[2] = static_cast<float>(this->meshMinBounds.z());   
+    uniforms._pad1 = 0;     
+    uniforms._pad2[0] = 0;
+    uniforms._pad2[1] = 0;
+
+    wgpu::BufferDescriptor uniformBufferDesc{};
+    uniformBufferDesc.size = sizeof(VoxelizerUniforms);
+    uniformBufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    uniformBufferDesc.mappedAtCreation = false;
+    uniformBufferDesc.label = "Voxelizer Uniform Buffer";
+    wgpu::Buffer uniformBuffer;;
+    this->gpuBundle->SafeCreateBuffer(&uniformBufferDesc, uniformBuffer);
+
     uint32_t bricksProcessed = 0;
     for (uint8_t pass = 0; pass < numPasses; pass++)
     {
+        std::clock_t startPassTime = std::clock();
+
         uint32_t brickStart = bricksProcessed;
         uint32_t bricksThisPass = std::min(maxBricksPerPass, (voxelResolution / 8) * (voxelResolution / 8) * (voxelResolution / 8) - bricksProcessed);
         uint32_t brickEnd = brickStart + bricksThisPass;
+
+        uniforms.brickStart = brickStart;
+        uniforms.brickEnd = brickEnd;
+        queue.WriteBuffer(uniformBuffer, 0, &uniforms, sizeof(VoxelizerUniforms));
 
         std::cout << "[Voxelizer] Pass " << (pass + 1) << "/" << (int)numPasses 
                   << ": Processing bricks " << brickStart << " to " << brickEnd - 1 << std::endl;
@@ -427,32 +471,11 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
         uint32_t counterZeros[2] = {0, 0};
         queue.WriteBuffer(this->countersBuffer, 0, counterZeros, sizeof(counterZeros));
 
-        // Clear occupancy buffer for this pass
+        // Clear occupancy buffer and color dense buffer for this pass
         std::vector<uint32_t> occZeros(16 * bricksThisPass, 0);
         queue.WriteBuffer(this->occupancyBuffer, 0, occZeros.data(), sizeof(uint32_t) * 16 * bricksThisPass);
-
-        VoxelizerUniforms uniforms;
-        uniforms.voxelResolution = voxelResolution;
-        uniforms.brickResolution = voxelResolution / 8;
-        uniforms.voxelSize = voxelSize;
-        uniforms.numTriangles = static_cast<uint32_t>(this->faces.rows());
-        uniforms.meshMinBounds[0] = static_cast<float>(this->meshMinBounds.x());
-        uniforms.meshMinBounds[1] = static_cast<float>(this->meshMinBounds.y());
-        uniforms.meshMinBounds[2] = static_cast<float>(this->meshMinBounds.z());   
-        uniforms._pad1 = 0;     
-        uniforms.brickStart = brickStart;
-        uniforms.brickEnd = brickEnd;
-        uniforms._pad2[0] = 0;
-        uniforms._pad2[1] = 0;
-
-        wgpu::BufferDescriptor uniformBufferDesc{};
-        uniformBufferDesc.size = sizeof(VoxelizerUniforms);
-        uniformBufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-        uniformBufferDesc.mappedAtCreation = false;
-        uniformBufferDesc.label = "Voxelizer Uniform Buffer";
-        wgpu::Buffer uniformBuffer;;
-        this->gpuBundle->SafeCreateBuffer(&uniformBufferDesc, uniformBuffer);
-        queue.WriteBuffer(uniformBuffer, 0, &uniforms, sizeof(VoxelizerUniforms));
+        std::vector<uint32_t> colorZeros(512 * bricksThisPass, 0);
+        queue.WriteBuffer(this->denseColorsBuffer, 0, colorZeros.data(), sizeof(uint32_t) * 512 * bricksThisPass);
 
         // [1] Voxelization pass
         {
@@ -462,8 +485,8 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             entries[2].binding = 2; entries[2].buffer = this->triangleBuffer; entries[2].size = sizeof(Triangle) * faces.rows();
             entries[3].binding = 3; entries[3].textureView = this->textureView;
             entries[4].binding = 4; entries[4].sampler = this->textureSampler;
-            entries[5].binding = 5; entries[5].buffer = this->occupancyBuffer; entries[5].size = sizeof(uint32_t) * 16 * uniforms.brickResolution * uniforms.brickResolution * uniforms.brickResolution;
-            entries[6].binding = 6; entries[6].buffer = this->denseColorsBuffer; entries[6].size = sizeof(uint32_t) * voxelResolution * voxelResolution * voxelResolution;
+            entries[5].binding = 5; entries[5].buffer = this->occupancyBuffer; entries[5].size = sizeof(uint32_t) * 16 * bricksThisPass;
+            entries[6].binding = 6; entries[6].buffer = this->denseColorsBuffer; entries[6].size = sizeof(uint32_t) * bricksThisPass * 512;
 
             wgpu::BindGroupDescriptor bindGroupDesc{};
             bindGroupDesc.layout = this->voxelizationPipeline.bindGroupLayout;
@@ -476,7 +499,7 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             pass.SetPipeline(this->voxelizationPipeline.computePipeline);
             pass.SetBindGroup(0, bindGroup);
 
-            uint32_t numWorkGroups = (uniforms.numTriangles + 63) / 64;
+            uint32_t numWorkGroups = (bricksThisPass + 63) / 64;
             pass.DispatchWorkgroups(numWorkGroups, 1, 1);
             pass.End();
 
@@ -488,10 +511,10 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
         {
             wgpu::BindGroupEntry entries[6]{};
             entries[0].binding = 0; entries[0].buffer = uniformBuffer; entries[0].size = sizeof(VoxelizerUniforms);
-            entries[1].binding = 1; entries[1].buffer = this->occupancyBuffer; entries[1].size = sizeof(uint32_t) * 16 * uniforms.brickResolution * uniforms.brickResolution * uniforms.brickResolution;
-            entries[2].binding = 2; entries[2].buffer = this->denseColorsBuffer; entries[2].size = sizeof(uint32_t) * voxelResolution * voxelResolution * voxelResolution;
-            entries[3].binding = 3; entries[3].buffer = this->brickOutputBuffer; entries[3].size = sizeof(BrickOutput) * uniforms.brickResolution * uniforms.brickResolution * uniforms.brickResolution;
-            entries[4].binding = 4; entries[4].buffer = this->packedColorBuffer; entries[4].size = sizeof(uint32_t) * voxelResolution * voxelResolution * voxelResolution;
+            entries[1].binding = 1; entries[1].buffer = this->occupancyBuffer; entries[1].size = sizeof(uint32_t) * 16 * bricksThisPass;
+            entries[2].binding = 2; entries[2].buffer = this->denseColorsBuffer; entries[2].size = sizeof(uint32_t) * bricksThisPass * 512;
+            entries[3].binding = 3; entries[3].buffer = this->brickOutputBuffer; entries[3].size = sizeof(BrickOutput) * bricksThisPass;
+            entries[4].binding = 4; entries[4].buffer = this->packedColorBuffer; entries[4].size = sizeof(uint32_t) * bricksThisPass * 512;
             entries[5].binding = 5; entries[5].buffer = this->countersBuffer; entries[5].size = sizeof(uint32_t) * 2;
 
             wgpu::BindGroupDescriptor bindGroupDesc{};
@@ -505,8 +528,7 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             pass.SetPipeline(this->compactVoxelPipeline.computePipeline);
             pass.SetBindGroup(0, bindGroup);
 
-            uint32_t numBricks = uniforms.brickResolution * uniforms.brickResolution * uniforms.brickResolution;
-            uint32_t numWorkGroups = (numBricks + 63) / 64;
+            uint32_t numWorkGroups = (bricksThisPass + 63) / 64;
             pass.DispatchWorkgroups(numWorkGroups, 1, 1);
             pass.End();
 
@@ -525,19 +547,13 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
                 }
             );
             this->gpuBundle->GetInstance().WaitAny(workDoneFuture, UINT64_MAX);
+            this->gpuBundle->GetInstance().WaitAny(workDoneFuture, UINT64_MAX);
         }
 
-        // Read the counters
-        wgpu::BufferDescriptor readbackDesc{};
-        readbackDesc.size = sizeof(uint32_t) * 2;
-        readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-        readbackDesc.mappedAtCreation = false;
-        readbackDesc.label = "Counter Readback Buffer";
-        wgpu::Buffer counterReadback;
-        this->gpuBundle->SafeCreateBuffer(&readbackDesc, counterReadback);
+        // Reset readback buffer descriptors
         {
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-            encoder.CopyBufferToBuffer(this->countersBuffer, 0, counterReadback, 0, sizeof(uint32_t) * 2);
+            encoder.CopyBufferToBuffer(this->countersBuffer, 0, this->counterReadbackBuffer, 0, sizeof(uint32_t) * 2);
             wgpu::CommandBuffer commandBuffer = encoder.Finish();
             queue.Submit(1, &commandBuffer);
         }
@@ -545,7 +561,7 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
         uint32_t occupiedBrickCount = 0;
         uint32_t totalColorCount = 0;
         {
-            wgpu::Future mapFuture = counterReadback.MapAsync(
+            wgpu::Future mapFuture = this->counterReadbackBuffer.MapAsync(
                 wgpu::MapMode::Read, 0, sizeof(uint32_t) * 2,
                 wgpu::CallbackMode::WaitAnyOnly,
                 [](wgpu::MapAsyncStatus status, wgpu::StringView message) {
@@ -556,7 +572,7 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             );
             this->gpuBundle->GetInstance().WaitAny(mapFuture, UINT64_MAX);
             
-            const uint32_t* data = static_cast<const uint32_t*>(counterReadback.GetConstMappedRange(0, sizeof(uint32_t) * 2));
+            const uint32_t* data = static_cast<const uint32_t*>(this->counterReadbackBuffer.GetConstMappedRange(0, sizeof(uint32_t) * 2));
             if (!data) 
             {
                 std::cerr << "[Voxelizer] Failed to get mapped range for counters" << std::endl;
@@ -564,8 +580,11 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             }
             occupiedBrickCount = data[0];
             totalColorCount = data[1];
-            counterReadback.Unmap();
+            this->counterReadbackBuffer.Unmap();
         }
+
+        assert(occupiedBrickCount <= bricksThisPass);
+        assert(totalColorCount <= bricksThisPass * 512);
 
         std::cout << "[Voxelizer] Pass " << (pass + 1) << ": " << occupiedBrickCount 
                   << " occupied bricks, " << totalColorCount << " colors" << std::endl;
@@ -578,33 +597,16 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
         }
 
         // Prepare to read the data back, in this pass
-        readbackDesc.size = sizeof(uint32_t) * 16 * bricksThisPass;
-        readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-        readbackDesc.mappedAtCreation = false;
-        readbackDesc.label = "Occupancy Readback Buffer";
-        wgpu::Buffer occupancyReadback;
-        this->gpuBundle->SafeCreateBuffer(&readbackDesc, occupancyReadback);
-
-        readbackDesc.size = sizeof(BrickOutput) * occupiedBrickCount;
-        readbackDesc.label = "Brick Output Readback Buffer";
-        wgpu::Buffer brickOutputReadback;
-        this->gpuBundle->SafeCreateBuffer(&readbackDesc, brickOutputReadback);
-
-        readbackDesc.size = sizeof(uint32_t) * totalColorCount;;
-        readbackDesc.label = "Packed Color Readback Buffer";
-        wgpu::Buffer packedColorReadback;
-        this->gpuBundle->SafeCreateBuffer(&readbackDesc, packedColorReadback);
-
         {
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-            encoder.CopyBufferToBuffer(this->occupancyBuffer, 0, occupancyReadback, 0, sizeof(uint32_t) * 16 * bricksThisPass);
-            encoder.CopyBufferToBuffer(this->brickOutputBuffer, 0, brickOutputReadback, 0, sizeof(BrickOutput) * occupiedBrickCount);
-            encoder.CopyBufferToBuffer(this->packedColorBuffer, 0, packedColorReadback, 0, sizeof(uint32_t) * totalColorCount);
+            encoder.CopyBufferToBuffer(this->occupancyBuffer, 0, this->occupancyReadbackBuffer, 0, sizeof(uint32_t) * 16 * bricksThisPass);
+            encoder.CopyBufferToBuffer(this->brickOutputBuffer, 0, this->brickOutputReadbackBuffer, 0, sizeof(BrickOutput) * occupiedBrickCount);
+            encoder.CopyBufferToBuffer(this->packedColorBuffer, 0, this->packedColorReadbackBuffer, 0, sizeof(uint32_t) * totalColorCount);
             wgpu::CommandBuffer commandBuffer = encoder.Finish();
             queue.Submit(1, &commandBuffer);
         }
 
-        wgpu::Future occMapFuture = occupancyReadback.MapAsync(
+        wgpu::Future occMapFuture = this->occupancyReadbackBuffer.MapAsync(
             wgpu::MapMode::Read, 0, sizeof(uint32_t) * 16 * bricksThisPass,
             wgpu::CallbackMode::WaitAnyOnly,
             [](wgpu::MapAsyncStatus status, wgpu::StringView message) {
@@ -614,7 +616,7 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             }
         );
 
-        wgpu::Future brickMapFuture = brickOutputReadback.MapAsync(
+        wgpu::Future brickMapFuture = this->brickOutputReadbackBuffer.MapAsync(
             wgpu::MapMode::Read, 0, sizeof(BrickOutput) * occupiedBrickCount,
             wgpu::CallbackMode::WaitAnyOnly,
             [](wgpu::MapAsyncStatus status, wgpu::StringView message) {
@@ -624,7 +626,7 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             }
         );
 
-        wgpu::Future colorMapFuture = packedColorReadback.MapAsync(
+        wgpu::Future colorMapFuture = this->packedColorReadbackBuffer.MapAsync(
             wgpu::MapMode::Read, 0, sizeof(uint32_t) * totalColorCount,
             wgpu::CallbackMode::WaitAnyOnly,
             [](wgpu::MapAsyncStatus status, wgpu::StringView message) {
@@ -643,9 +645,9 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
         this->gpuBundle->GetInstance().WaitAny(3, waitInfos, UINT64_MAX);
 
         // Final raw data:
-        const uint32_t* occupancyData = static_cast<const uint32_t*>(occupancyReadback.GetConstMappedRange(0, sizeof(uint32_t) * 16 * bricksThisPass));
-        const BrickOutput* brickOutputData = static_cast<const BrickOutput*>(brickOutputReadback.GetConstMappedRange(0, sizeof(BrickOutput) * occupiedBrickCount));
-        const uint32_t* colorData = static_cast<const uint32_t*>(packedColorReadback.GetConstMappedRange(0, sizeof(uint32_t) * totalColorCount));
+        const uint32_t* occupancyData = static_cast<const uint32_t*>(this->occupancyReadbackBuffer.GetConstMappedRange(0, sizeof(uint32_t) * 16 * bricksThisPass));
+        const BrickOutput* brickOutputData = static_cast<const BrickOutput*>(this->brickOutputReadbackBuffer.GetConstMappedRange(0, sizeof(BrickOutput) * occupiedBrickCount));
+        const uint32_t* colorData = static_cast<const uint32_t*>(this->packedColorReadbackBuffer.GetConstMappedRange(0, sizeof(uint32_t) * totalColorCount));
 
         if (!occupancyData || !brickOutputData || !colorData) 
         {
@@ -681,11 +683,16 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             writer.AddBrick(globalBrickIndex, occupancy, colors, lodColor);
         }
 
-        occupancyReadback.Unmap();
-        brickOutputReadback.Unmap();
-        packedColorReadback.Unmap();
+        this->occupancyReadbackBuffer.Unmap();
+        this->brickOutputReadbackBuffer.Unmap();
+        this->packedColorReadbackBuffer.Unmap();
 
         bricksProcessed += bricksThisPass;
+
+        std::clock_t endPassTime = std::clock();
+        double passDuration = double(endPassTime - startPassTime) / CLOCKS_PER_SEC;
+        std::cout << "[Voxelizer] Pass " << (pass + 1) << " completed in " 
+                  << passDuration << " seconds." << std::endl;
     }
 
     writer.EndFile();

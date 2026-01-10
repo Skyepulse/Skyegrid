@@ -7,6 +7,9 @@ struct Uniforms {
     numTriangles: u32,
     meshMinBounds: vec3<f32>,
     _pad: u32,
+    brickStart: u32,
+    brickEnd: u32,
+    _pad2: vec2<u32>,
 }
 
 struct Vertex {
@@ -38,11 +41,17 @@ fn voxelToLinear(voxel: vec3<u32>) -> u32 {
 fn voxelToBrickIndices(voxel: vec3<u32>) -> vec2<u32> {
     let brickCoord = voxel / 8u;
     let localCoord = voxel % 8u;
+
+    let globalBrickIndex = brickCoord.x + brickCoord.y * uniforms.brickResolution + brickCoord.z * uniforms.brickResolution * uniforms.brickResolution;
+    if (globalBrickIndex < uniforms.brickStart || globalBrickIndex >= uniforms.brickEnd) {
+        // Out of range, return invalid indices
+        return vec2<u32>(0xFFFFFFFFu, 0u);
+    }
     
-    let brickIndex = brickCoord.x + brickCoord.y * uniforms.brickResolution + brickCoord.z * uniforms.brickResolution * uniforms.brickResolution;
-    let localIndex = localCoord.x + localCoord.y * 8u + localCoord.z * 64u; // 0-511
+    let localBrickIndex = globalBrickIndex - uniforms.brickStart;
+    let localVoxelIndex = localCoord.x + localCoord.y * 8u + localCoord.z * 64u; // 0-511
     
-    return vec2<u32>(brickIndex, localIndex);
+    return vec2<u32>(localBrickIndex, localVoxelIndex);
 }
 
 // Set occupancy bit atomically
@@ -165,6 +174,9 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (triangleAABBIntersect(p0, p1, p2, voxelCenter, halfSize)) {
                     // Mark occupancy
                     let indices = voxelToBrickIndices(voxel);
+                    if (indices.x == 0xFFFFFFFFu) {
+                        continue; // Out of range
+                    }
                     setOccupancy(indices.x, indices.y);
                     
                     // Sample color at voxel center

@@ -7,9 +7,9 @@
 int main(int argc, char** argv)
 {
     // parse first arg as input mesh file, second arg as output voxel file, third arg as voxel resolution
-    std::string inputMeshFile;
-    std::string outputVoxelFile = "output_voxel.vox";
-    uint32_t voxelResolution = 128;
+    std::string inputMeshFile = "meshes/wallE.ply";
+    std::string outputVoxelFile = "data/output_voxel.vox";
+    uint32_t voxelResolution = 16;
 
     if (argc > 1)
     {
@@ -48,7 +48,10 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!voxelizer.voxelizeMesh(outputVoxelFile, voxelResolution))
+    uint32_t maxBricksPerPass;
+    uint8_t numPasses;
+    voxelizer.checkLimits(voxelResolution, maxBricksPerPass, numPasses);
+    if (!voxelizer.voxelizeMesh(outputVoxelFile, voxelResolution, maxBricksPerPass, numPasses))
     {
         std::cerr << "Error: Failed to voxelize mesh and save to file: " << outputVoxelFile << "\n";
         return 1;

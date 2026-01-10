@@ -70,7 +70,9 @@ struct VoxelizerUniforms
 struct Vertex
 {
     float position[3];
+    float _pad;
     float uv[2];
+    float _pad2[2];
     float normal[3];
     float padding;
 };
@@ -126,6 +128,11 @@ private:
     wgpu::Buffer brickOutputBuffer;
     wgpu::Buffer packedColorBuffer;
     wgpu::Buffer countersBuffer;
+
+    wgpu::Buffer counterReadbackBuffer;
+    wgpu::Buffer occupancyReadbackBuffer;
+    wgpu::Buffer brickOutputReadbackBuffer;
+    wgpu::Buffer packedColorReadbackBuffer;
 
     RenderPipelineWrapper voxelizationPipeline;
     RenderPipelineWrapper compactVoxelPipeline;

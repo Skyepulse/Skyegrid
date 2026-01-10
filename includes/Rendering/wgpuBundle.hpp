@@ -19,8 +19,8 @@ class WgpuBundle
 {
 public:
     WgpuBundle(WindowFormat windowFormat);
-    ~WgpuBundle() = default;
-
+    ~WgpuBundle();
+    
     wgpu::Instance& GetInstance() { return this->instance; }
     wgpu::Adapter& GetAdapter() { return this->adapter; }
     wgpu::Device& GetDevice() { return this->device; }

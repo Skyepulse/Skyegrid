@@ -31,6 +31,29 @@ WgpuBundle::WgpuBundle(WindowFormat windowFormat) : window(windowFormat.window),
 }
 
 //================================//
+WgpuBundle::~WgpuBundle()
+{
+    std::cout << "[wgpuBundle][Shutdown] Cleaning up WebGPU resources..." << std::endl;
+    // Wait for all GPU work to complete before destroying resources
+    if (this->device)
+    {
+        wgpu::Queue queue = this->device.GetQueue();
+        if (queue)
+        {
+            wgpu::Future workDoneFuture = queue.OnSubmittedWorkDone(
+                wgpu::CallbackMode::WaitAnyOnly,
+                [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {}
+            );
+            this->instance.WaitAny(workDoneFuture, UINT64_MAX);
+        }
+    }
+
+    // Destroy device first
+    if (this->device)
+        this->device.Destroy();
+}
+
+//================================//
 void WgpuBundle::InitializeInstance()
 {
     // Instance required features

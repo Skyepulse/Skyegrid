@@ -7,11 +7,14 @@ struct Uniforms {
     numTriangles: u32,
     meshMinBounds: vec3<f32>,
     _pad: u32,
+    brickStart: u32,
+    brickEnd: u32,
+    _pad2: vec2<u32>,
 }
 
 struct BrickOutput {
     brickGridIndex: u32,
-    lodColor: u32,      // packed RGB + flags
+    lodColor: u32,
     dataOffset: u32,
     numOccupied: u32,
 }
@@ -20,8 +23,8 @@ struct BrickOutput {
 @group(0) @binding(1) var<storage, read> occupancy: array<u32>;
 @group(0) @binding(2) var<storage, read> denseColors: array<u32>;
 @group(0) @binding(3) var<storage, read_write> brickOutputs: array<BrickOutput>;
-@group(0) @binding(4) var<storage, read_write> packedColors: array<u32>; // Output packed colors
-@group(0) @binding(5) var<storage, read_write> counters: array<atomic<u32>>; // [0]: brick counter, [1]: color counter
+@group(0) @binding(4) var<storage, read_write> packedColors: array<u32>;
+@group(0) @binding(5) var<storage, read_write> counters: array<atomic<u32>>;
 
 fn popcount(x: u32) -> u32 {
     var v = x;
@@ -43,13 +46,13 @@ fn unpackColor(packed: u32) -> vec3<u32> {
 
 @compute @workgroup_size(64)
 fn c(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let brickIndex = gid.x;
-    let totalBricks = uniforms.brickResolution * uniforms.brickResolution * uniforms.brickResolution;
-    if (brickIndex >= totalBricks) { return; }
+    let localBrickIndex = gid.x;
+    let bricksThisPass = uniforms.brickEnd - uniforms.brickStart;
+    if (localBrickIndex >= bricksThisPass) { return; }
     
     // Count occupied voxels in this brick
     var occupiedCount = 0u;
-    let occBase = brickIndex * 16u;
+    let occBase = localBrickIndex * 16u;
     
     for (var i = 0u; i < 16u; i++) {
         occupiedCount += popcount(occupancy[occBase + i]);
@@ -61,12 +64,13 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>) {
     let outputIndex = atomicAdd(&counters[0], 1u);
     let colorOffset = atomicAdd(&counters[1], occupiedCount);
     
-    // Compute brick grid coordinates
-    let brickZ = brickIndex / (uniforms.brickResolution * uniforms.brickResolution);
-    let brickY = (brickIndex / uniforms.brickResolution) % uniforms.brickResolution;
-    let brickX = brickIndex % uniforms.brickResolution;
+    // Convert local brick index to global brick coordinates
+    let globalBrickIndex = uniforms.brickStart + localBrickIndex;
+    let brickZ = globalBrickIndex / (uniforms.brickResolution * uniforms.brickResolution);
+    let brickY = (globalBrickIndex / uniforms.brickResolution) % uniforms.brickResolution;
+    let brickX = globalBrickIndex % uniforms.brickResolution;
     
-    // Compute voxel base
+    // Voxel base in global voxel coordinates
     let voxelBase = vec3<u32>(brickX, brickY, brickZ) * 8u;
     
     // Gather colors and compute LOD average
@@ -76,15 +80,15 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var localZ = 0u; localZ < 8u; localZ++) {
         for (var localY = 0u; localY < 8u; localY++) {
             for (var localX = 0u; localX < 8u; localX++) {
-                let localIdx = localX + localY * 8u + localZ * 64u;
-                let wordIdx = localIdx / 32u;
-                let bitIdx = localIdx % 32u;
+                let localVoxelIdx = localX + localY * 8u + localZ * 64u;
+                let wordIdx = localVoxelIdx / 32u;
+                let bitIdx = localVoxelIdx % 32u;
                 
                 if ((occupancy[occBase + wordIdx] & (1u << bitIdx)) != 0u) {
-                    let voxel = voxelBase + vec3<u32>(localX, localY, localZ);
-                    let linearIdx = voxel.x + voxel.y * uniforms.voxelResolution + voxel.z * uniforms.voxelResolution * uniforms.voxelResolution;
+                    // Index into LOCAL dense colors buffer (sized for this pass only)
+                    let localDenseIdx = localBrickIndex * 512u + localVoxelIdx;
                     
-                    let packedColor = denseColors[linearIdx];
+                    let packedColor = denseColors[localDenseIdx];
                     packedColors[colorOffset + colorIdx] = packedColor;
                     colorIdx++;
                     
@@ -100,8 +104,8 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>) {
     let avgG = colorSum.y / occupiedCount;
     let avgB = colorSum.z / occupiedCount;
     
-    // Store brick output
-    brickOutputs[outputIndex].brickGridIndex = brickIndex;
+    // Store brick output - use LOCAL index, CPU converts to global
+    brickOutputs[outputIndex].brickGridIndex = localBrickIndex;
     brickOutputs[outputIndex].lodColor = (avgR & 0xFFu) | ((avgG & 0xFFu) << 8u) | ((avgB & 0xFFu) << 16u);
     brickOutputs[outputIndex].dataOffset = colorOffset;
     brickOutputs[outputIndex].numOccupied = occupiedCount;

@@ -50,13 +50,20 @@ void WgpuBundle::InitializeInstance()
 
     this->supportsTimestampQuery = this->adapter.HasFeature(wgpu::FeatureName::TimestampQuery);
 
-    // Device
     wgpu::DeviceDescriptor deviceDesc{};
     deviceDesc.requiredLimits = &this->limits;
     deviceDesc.SetUncapturedErrorCallback(
         [](const wgpu::Device&, wgpu::ErrorType errorType, wgpu::StringView message)
         {
             std::cout << "[wgpuDevice] Uncaptured error: " << message << std::endl;
+        }
+    );
+    deviceDesc.SetDeviceLostCallback(
+        wgpu::CallbackMode::WaitAnyOnly,
+        [](const wgpu::Device& device, wgpu::DeviceLostReason reason, wgpu::StringView message)
+        {
+            std::cerr << "[wgpuDevice] Device lost! Reason: " << static_cast<int>(reason) 
+                    << ", Message: " << std::string(message.data, message.length) << std::endl;
         }
     );
 
@@ -78,6 +85,8 @@ void WgpuBundle::InitializeInstance()
     }
     if (wgpuCreateDevice(this->instance, this->adapter, this->device, &deviceDesc) < 0)
         throw std::runtime_error("Failed to create WebGPU device.");
+
+    
 
     wgpu::AdapterInfo info;
     adapter.GetInfo(&info);

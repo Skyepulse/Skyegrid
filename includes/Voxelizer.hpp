@@ -61,7 +61,10 @@ struct VoxelizerUniforms
     float    voxelSize;
     uint32_t numTriangles;
     float    meshMinBounds[3];
-    uint32_t _pad;
+    uint32_t _pad1;
+    uint32_t brickStart;
+    uint32_t brickEnd;
+    uint32_t _pad2[2];
 };
 
 struct Vertex
@@ -86,11 +89,12 @@ public:
     ~Voxelizer();
 
     bool loadMesh(const std::string& filename, const std::string& texturePath = "");
-    bool voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelResolution);
+    void checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPass, uint8_t& numPasses);
+    bool voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelResolution, uint32_t maxBricksPerPass, uint8_t numPasses);
 
 private:
 
-    void initializeGpuResources(uint32_t voxelResolution);
+    void initializeGpuResources(uint32_t maxBricksPerPass);
 
     std::unique_ptr<WgpuBundle> gpuBundle;
 

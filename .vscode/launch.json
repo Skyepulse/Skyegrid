@@ -5,8 +5,8 @@
       "name": "(Windows) Launch Executable",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/Debug/Skyegrid.exe",  // Path to your executable
-      "args": [],                                             // Command-line arguments (if any)
+      "program": "${workspaceFolder}/build/Debug/Voxelizer.exe",  // Path to your executable
+      "args": ["meshes/wallE.ply"],                           // Command-line arguments (if any)
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",                           // Working directory
       "environment": [],

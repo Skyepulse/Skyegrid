@@ -383,7 +383,7 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
 void Voxelizer::checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPass, uint8_t& numPasses)
 {
     const uint64_t colorBytesPerBrick = sizeof(uint32_t) * 8 * 8 * 8;
-    uint64_t maxBufferSize = this->gpuBundle->GetLimits().maxBufferSize;
+    uint64_t maxBufferSize = this->gpuBundle->GetLimits().maxBufferSize * 0.6;
     uint64_t maxColorBufferSize = (maxBufferSize / static_cast<uint64_t>(colorBytesPerBrick)) * static_cast<uint64_t>(colorBytesPerBrick);
 
     if(voxelResolution <= 0) voxelResolution = 8;
@@ -399,11 +399,21 @@ void Voxelizer::checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPas
     }
 
     uint64_t totalBricks = static_cast<uint64_t>(brickResolution) * brickResolution * brickResolution;
-    const uint64_t maxPassBricksValue = 13824;
-
-    //uint64_t totalColorBufferSize = totalBricks * colorBytesPerBrick;
-    maxBricksPerPass = std::min(maxPassBricksValue, totalBricks);
-    numPasses = static_cast<uint8_t>((totalBricks + maxBricksPerPass - 1) / maxBricksPerPass);
+    uint64_t totalColorBufferSize = totalBricks * colorBytesPerBrick;
+    if(totalColorBufferSize > maxColorBufferSize)
+    {
+        maxBricksPerPass = static_cast<uint32_t>(maxColorBufferSize / colorBytesPerBrick);
+        std::cout << "[Voxelizer] Warning: Voxel resolution too high for available GPU memory, max bricks per pass set to " <<
+            maxBricksPerPass << " (" << (maxBricksPerPass * 8) << "^3 voxels)" << std::endl;
+        numPasses = static_cast<uint8_t>((totalBricks + maxBricksPerPass - 1) / maxBricksPerPass);
+        std::cout << "[Voxelizer] Voxelization will be performed in " << static_cast<uint32_t>(numPasses) << " passes." << std::endl;
+    }
+    else
+    {
+        maxBricksPerPass = static_cast<uint32_t>(totalBricks);
+        std::cout << "[Voxelizer] Voxelization can proceed with " << maxBricksPerPass << " bricks in only one pass." << std::endl;
+        numPasses = 1;
+    }
 }
 
 //================================//

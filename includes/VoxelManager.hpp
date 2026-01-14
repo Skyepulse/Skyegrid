@@ -10,6 +10,9 @@
 #include <map>
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <queue>
+#include <condition_variable>
 #include <iostream>
 
 class VoxelManager; // Forward declaration
@@ -24,6 +27,10 @@ const int MAX_COLOR_POOLS = 3;
 // Number of buffered frames for async operations
 const int NUM_UPLOAD_BUFFERS = 2;
 const int NUM_FEEDBACK_BUFFERS = 2;
+
+// Async disk read limits
+const int MAX_PENDING_DISK_READS = 256; // Max bricks queued for disk reading per frame
+const int MAX_READY_BRICKS = 512;      // Max bricks ready to be uploaded per frame
 
 //================================//
 struct ColorRGB
@@ -45,6 +52,8 @@ struct BrickGridCellCPU
 {
     bool dirty = false;
     bool onGPU = false;
+    bool reading = false;
+    bool pendingRead = false;
     uint32_t gpuBrickIndex = UINT32_MAX;
     ColorRGB LODColor;
 };
@@ -103,6 +112,16 @@ struct FeedbackBufferSlot
 };
 
 //================================//
+// Async disk read result
+struct DiskReadResult
+{
+    uint32_t brickGridIndex;
+    uint32_t occupancy[16];
+    ColorRGB colors[512];
+    bool success;
+};
+
+//================================//
 class VoxelManager
 {
 public:
@@ -111,9 +130,13 @@ public:
         static_assert(sizeof(ColorRGB) == 4); // packed in UINT32
         this->hasColor = HAS_VOXEL_COLOR;
         validateResolution(bundle, resolution, maxVisibleBricks);
+
+        startDiskReaderThread(); // This thread will be woken up and sleep as needed to read async bricks
     };
     ~VoxelManager()
     {
+        stopDiskReaderThread();
+
         // free vectors
         brickGrid.clear();
     };
@@ -150,6 +173,8 @@ public:
         dirtyBrickIndices.clear();
         hasPendingFeedback = false;
         pendingUploadCount = 0;
+
+        clearDiskReadQueues();
         
         initDynamicBuffers(bundle);
     }
@@ -184,10 +209,6 @@ public:
     int currentFeedbackWriteSlot = 0;  // Slot GPU writes to
     int currentFeedbackReadSlot = 0;   // Slot CPU reads from
 
-    std::vector<uint32_t> feedbackRequests;
-    std::vector<uint32_t> freeBrickSlots;
-    std::vector<uint32_t> dirtyBrickIndices;
-
     uint32_t pendingUploadCount = 0;
     uint32_t numberOfColorPools = 0;
     uint32_t maxColorBufferEntries = 0;
@@ -195,6 +216,10 @@ public:
     uint64_t lastBrickIndex = 0; // DEBUG
     
     bool hasPendingFeedback = false;
+
+    std::vector<uint32_t> feedbackRequests;
+    std::vector<uint32_t> freeBrickSlots;
+    std::vector<uint32_t> dirtyBrickIndices;
 
 private:
 
@@ -205,6 +230,15 @@ private:
     void requestUploadBufferMap(int slotIndex);
     void requestFeedbackBufferMap(int slotIndex);
     void processPendingFeedback();
+    void requestRead(const std::vector<uint32_t>& indices);
+
+    // Async disk reading thread methods
+    void startDiskReaderThread();
+    void stopDiskReaderThread();
+    void diskReaderThreadFunc();
+    void clearDiskReadQueues();
+    void queueDiskRead(uint32_t brickGridIndex);
+    void processCompletedDiskReads();
 
     int voxelResolution; 
     int BrickResolution;
@@ -214,6 +248,19 @@ private:
 
     std::unique_ptr<VoxelFileReader> voxelFileReader;
     bool loadedMesh = false;
+
+    // The thread
+    std::thread diskReaderThread;
+    std::atomic<bool> diskReaderThreadRunning = false;
+
+    std::queue<uint32_t> diskReadRequestQueue; // So that we process them in order of arrival
+    std::mutex diskReadQueueMutex;
+    std::condition_variable diskReadQueueCV;
+
+    std::queue<DiskReadResult> diskReadResultQueue;
+    std::mutex diskReadResultMutex;
+
+    std::mutex fileReadMutex; // To protect file reading operations during async reads
 };
 
 #endif 

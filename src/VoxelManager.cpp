@@ -6,6 +6,8 @@
 #include <fstream>
 
 //================================//
+// STRUCTS
+//================================//
 struct UploadMapCallbackContext 
 {
     VoxelManager* voxelManager;
@@ -18,6 +20,8 @@ struct FeedbackMapCallbackContext
     int slotIndex;
 };
 
+//================================//
+// HELPER FUNCTIONS
 //================================//
 static uint32_t PackLOD(ColorRGB c)
 {
@@ -168,11 +172,249 @@ ColorRGB VoxelManager::computeBrickAverageColor(const BrickMapCPU& brick)
 }
 
 //================================//
+// DISK READER THREAD METHODS
+//================================//
+void VoxelManager::loadFile(const std::string& filename)
+{
+    // Does file exist?
+    std::ifstream fileCheck(filename, std::ios::binary);
+    if (!fileCheck)
+    {
+        std::cout << "[VoxelManager] Voxel file " << filename << " does not exist." << std::endl;
+        return;
+    }
+
+    this->voxelFileReader = std::make_unique<VoxelFileReader>(filename);
+    this->loadedMesh = true;
+
+    std::cout << "[VoxelManager] Voxel file " << filename << " loaded. Resolution: " << this->voxelFileReader->getResolution() << std::endl;
+}
+
+//================================//
+void VoxelManager::startDiskReaderThread()
+{
+    diskReaderThreadRunning.store(true);
+    diskReaderThread = std::thread(&VoxelManager::diskReaderThreadFunc, this);
+}
+
+//================================//
+void VoxelManager::stopDiskReaderThread()
+{
+    if (diskReaderThreadRunning.load())
+    {
+        diskReaderThreadRunning.store(false);
+        
+        // Wake up the thread if it's waiting
+        {
+            std::lock_guard<std::mutex> lock(diskReadQueueMutex);
+            diskReadQueueCV.notify_all();
+        }
+        
+        if (diskReaderThread.joinable())
+        {
+            diskReaderThread.join();
+        }
+    }
+}
+
+//================================//
+// We clear pending, completed and queued reads
+void VoxelManager::clearDiskReadQueues()
+{
+    {
+        std::lock_guard<std::mutex> lock(diskReadQueueMutex);
+        std::queue<uint32_t> empty;
+        std::swap(diskReadRequestQueue, empty);
+    }
+    {
+        std::lock_guard<std::mutex> lock(diskReadResultMutex);
+        std::queue<DiskReadResult> empty;
+        std::swap(diskReadResultQueue, empty);
+    }
+    {
+        for(auto& cell : brickGridCPU)
+        {
+            cell.reading = false;
+            cell.pendingRead = false;
+        }
+    }
+}
+
+//================================//
+void VoxelManager::queueDiskRead(uint32_t brickGridIndex)
+{
+    {
+        std::lock_guard<std::mutex> lock(diskReadQueueMutex);
+        diskReadRequestQueue.push(brickGridIndex);
+    }
+    
+    diskReadQueueCV.notify_one();
+}
+
+//================================//
+void VoxelManager::diskReaderThreadFunc()
+{
+    while (diskReaderThreadRunning.load())
+    {
+        uint32_t brickGridIndex = UINT32_MAX;
+        
+        // here we wait fro requests to arrive
+        {
+            std::unique_lock<std::mutex> lock(diskReadQueueMutex);
+            diskReadQueueCV.wait(lock, [this]() {
+                return !diskReadRequestQueue.empty() || !diskReaderThreadRunning.load();
+            });
+            
+            if (!diskReaderThreadRunning.load() && diskReadRequestQueue.empty())
+                break;
+            
+            if (!diskReadRequestQueue.empty())
+            {
+                brickGridIndex = diskReadRequestQueue.front();
+                diskReadRequestQueue.pop();
+            }
+        }
+        
+        if (brickGridIndex == UINT32_MAX)
+            continue; // Meaning we did not find work
+        
+        DiskReadResult result;
+        result.brickGridIndex = brickGridIndex;
+        result.success = false;
+        
+        // Initialize occupancy and colors to zero
+        std::memset(result.occupancy, 0, sizeof(result.occupancy));
+        std::memset(result.colors, 0, sizeof(result.colors));
+        
+        {
+            std::lock_guard<std::mutex> lock(fileReadMutex); // majes the read thread safe
+            
+            if (loadedMesh && voxelFileReader) // Only read if we have a loaded mesh
+            {
+                brickDataEntry diskData;
+                if (voxelFileReader->getBrickData(brickGridIndex, diskData))
+                {
+                    std::memcpy(result.occupancy, diskData.occupancy, sizeof(result.occupancy));
+                    
+                    // The files stores colors densely, 
+                    // we need to map them in order 
+                    // with non empty voxels only
+                    size_t colorIndex = 0;
+                    for (int z = 0; z < 8 && colorIndex < diskData.colors.size(); ++z)
+                    {
+                        uint32_t firstSliceHalf = diskData.occupancy[2 * z];
+                        uint32_t secondSliceHalf = diskData.occupancy[2 * z + 1];
+                        uint64_t slice = (static_cast<uint64_t>(secondSliceHalf) << 32) | static_cast<uint64_t>(firstSliceHalf);
+                        
+                        for (int bit = 0; bit < 64 && slice != 0; bit++)
+                        {
+                            if (slice & (1ull << bit)) // VOXEL OCCUPIED
+                            {
+                                int voxelIndex = z * 64 + bit;
+                                if (colorIndex < diskData.colors.size())
+                                {
+                                    result.colors[voxelIndex].r = diskData.colors[colorIndex].r;
+                                    result.colors[voxelIndex].g = diskData.colors[colorIndex].g;
+                                    result.colors[voxelIndex].b = diskData.colors[colorIndex].b;
+                                    result.colors[voxelIndex]._pad = 0;
+                                    ++colorIndex;
+                                }
+                            }
+                        }
+                    }
+                    
+                    result.success = true;
+                }
+            }
+        }
+        
+        // Placeholder? FOr now only first voxel... TODO: better placeholder generation
+        if (!result.success)
+        {
+            // Generate a simple placeholder: single voxel with random color
+            result.occupancy[0] = 1u;
+            result.colors[0] = {
+                static_cast<uint8_t>(rand() % 256),
+                static_cast<uint8_t>(rand() % 256),
+                static_cast<uint8_t>(rand() % 256),
+                0
+            };
+            result.success = true;
+        }
+        {
+            std::lock_guard<std::mutex> lock(diskReadResultMutex);
+            diskReadResultQueue.push(std::move(result));
+        }
+    }
+}
+
+//================================//
+// This method will be called at start of frame to process any completed reads
+// that are ready to be uploaded to GPU
+void VoxelManager::processCompletedDiskReads()
+{
+    const uint32_t maxValidIndex = static_cast<uint32_t>(brickGridCPU.size());
+    int processedCount = 0;
+
+    while (processedCount < MAX_READY_BRICKS)
+    {
+        DiskReadResult result;
+
+        // Get the completed read from complete queue
+        {
+            std::lock_guard<std::mutex> lock(diskReadResultMutex);
+            if (diskReadResultQueue.empty())
+                break;
+            
+            result = std::move(diskReadResultQueue.front());
+            diskReadResultQueue.pop();
+        }
+
+        uint32_t brickGridIndex = result.brickGridIndex;
+
+        if (brickGridIndex >= maxValidIndex)
+            continue; // This should in theory not happen, since we already check when queuing for read
+
+        BrickGridCellCPU& brickCell = brickGridCPU[brickGridIndex];
+        brickCell.reading = false;
+        brickCell.pendingRead = false;
+
+        if (!result.success)
+            continue; // read failed, we skip, but still we mark as tried to read this brick
+
+        if(!brickCell.onGPU) // We need to allocate a brick slot
+        {
+            if (freeBrickSlots.empty())
+            {
+                continue;
+            }
+            
+            brickCell.gpuBrickIndex = freeBrickSlots.back();
+            freeBrickSlots.pop_back();
+            brickCell.onGPU = true;
+        }
+
+        BrickMapCPU& brickMap = brickMaps[brickGridIndex];
+        std::memcpy(brickMap.occupancy, result.occupancy, sizeof(brickMap.occupancy));
+        std::memcpy(brickMap.colors, result.colors, sizeof(brickMap.colors));
+
+        brickCell.dirty = true;
+        dirtyBrickIndices.push_back(brickGridIndex);
+        processedCount++;
+    }
+}
+
+//================================//
+// VOXEL MANAGER METHODS
+//================================//
 void VoxelManager::startOfFrame()
 {
     // At the start of the frame, reset dirty brick indices
     dirtyBrickIndices.clear();
     pendingUploadCount = 0;
+
+    // Process any completed disk reads AKA read from complete read queues
+    processCompletedDiskReads();
 
     // Process any pending feedback that was read from previous frames
     processPendingFeedback();
@@ -184,15 +426,7 @@ void VoxelManager::processPendingFeedback()
     if (!hasPendingFeedback)
         return;
 
-    const uint32_t maxValidIndex = static_cast<uint32_t>(brickGridCPU.size());
-    for (uint32_t requestedBrickIndex : this->feedbackRequests)
-    {
-        if (requestedBrickIndex < maxValidIndex)
-        {
-            this->dirtyBrickIndices.push_back(requestedBrickIndex);
-        }
-    }
-
+    this->requestRead( this->feedbackRequests );
     this->feedbackRequests.clear();
     this->hasPendingFeedback = false;
 }
@@ -308,6 +542,33 @@ void VoxelManager::processAsyncOperations(wgpu::Instance& instance)
 }
 
 //================================//
+void VoxelManager::requestRead(const std::vector<uint32_t>& indices)
+{
+    const uint32_t maxValidIndex = static_cast<uint32_t>(brickGridCPU.size());
+    int queuedCount = 0;
+
+    for (uint32_t requestedBrickIndex : indices)
+    {
+        if (queuedCount >= MAX_PENDING_DISK_READS)
+            break; // We cannot add more reads this frame, we will catch up next frame
+
+        if (requestedBrickIndex >= maxValidIndex)
+            continue; // Invalid index, skip (we filter here)
+
+        BrickGridCellCPU& brickCell = brickGridCPU[requestedBrickIndex];
+
+        if (brickCell.onGPU || brickCell.reading || brickCell.pendingRead)
+            continue;
+
+        brickCell.pendingRead = true;
+        brickCell.reading = true;
+
+        queueDiskRead(requestedBrickIndex);
+        queuedCount++;
+    }
+}
+
+//================================//
 void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, const wgpu::CommandEncoder& encoder)
 {
     // Try to find an available mapped upload buffer
@@ -357,35 +618,16 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
 
     for (uint32_t brickGridIndex : dirtyBrickIndices)
     {
+        if (pendingUploadCount >= MAX_FEEDBACK) break;
+
         BrickGridCellCPU& brick = brickGridCPU[brickGridIndex];
 
-        // if it is dirty and not on gpu, we must allocate a brick slot
-        if (!brick.onGPU)
-        {
-            if (freeBrickSlots.empty())
-            {
-                continue;
-            }
-
-            brick.gpuBrickIndex = freeBrickSlots.back();
-            freeBrickSlots.pop_back();
-            brick.onGPU = true;
-
-            BrickMapCPU& brickMap = brickMaps[brickGridIndex] = {};
-            brickMap.occupancy[0] = 1u;
-            for (int i = 1; i < 16; ++i)
-                brickMap.occupancy[i] = 0u;
-            brickMap.colors[0] = {
-                static_cast<uint8_t>(rand() % 256),
-                static_cast<uint8_t>(rand() % 256),
-                static_cast<uint8_t>(rand() % 256)
-            };
-        }
-
-        if (pendingUploadCount >= MAX_FEEDBACK) break;
+        if (!brick.dirty || !brick.onGPU)
+            continue;
 
         BrickMapCPU& brickMap = brickMaps[brickGridIndex];
         UploadEntry& entry = uploads[pendingUploadCount++];
+
         entry.gpuBrickSlot = brick.gpuBrickIndex;
         assert(entry.gpuBrickSlot < static_cast<uint32_t>(maxVisibleBricks));
 
@@ -439,8 +681,8 @@ void VoxelManager::update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, cons
             
             while (i + 1 < count && modifiedIndices[i + 1] == rangeEnd + 1)
             {
-                ++i;
-                ++rangeEnd;
+                i++;
+                rangeEnd++;
             }
             
             // Write the contiguous range
@@ -500,6 +742,8 @@ void VoxelManager::prepareFeedback(const wgpu::Queue& queue, const wgpu::Command
     currentFeedbackReadSlot = writeSlot;
 }
 
+//================================//
+// WGPU OBJECTS MANAGEMENT
 //================================//
 void VoxelManager::cleanupBuffers()
 {
@@ -749,21 +993,4 @@ void VoxelManager::createUploadBindGroup(RenderPipelineWrapper& pipelineWrapper,
     bindGroupDesc.entries = entries;
 
     pipelineWrapper.bindGroup = wgpuBundle.GetDevice().CreateBindGroup(&bindGroupDesc);
-}
-
-//================================//
-void VoxelManager::loadFile(const std::string& filename)
-{
-    // Does file exist?
-    std::ifstream fileCheck(filename, std::ios::binary);
-    if (!fileCheck)
-    {
-        std::cout << "[VoxelManager] Voxel file " << filename << " does not exist." << std::endl;
-        return;
-    }
-
-    this->voxelFileReader = std::make_unique<VoxelFileReader>(filename);
-    this->loadedMesh = true;
-
-    std::cout << "[VoxelManager] Voxel file " << filename << " loaded. Resolution: " << this->voxelFileReader->getResolution() << std::endl;
 }

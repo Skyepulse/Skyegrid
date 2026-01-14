@@ -41,8 +41,14 @@ int main(int argc, char** argv)
         }
     }
 
+    std::string fileName = "data/ov.vox";
+    if (argc > 3)
+    {
+        fileName = argv[3];
+    }
+
     SkyegridManager manager(false, value1, value2);
-    manager.LoadVoxelFile("data/output_voxel.vox");
+    manager.LoadVoxelFile(fileName);
     manager.InitGraphics();
     manager.RunMainLoop();
 

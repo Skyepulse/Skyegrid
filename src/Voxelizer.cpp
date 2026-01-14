@@ -1,6 +1,8 @@
 #include "../includes/Voxelizer.hpp"
 
 #include <igl/readPLY.h>
+#include <igl/readOBJ.h>
+#include <igl/readOFF.h>
 #include <iostream>
 #include <filesystem>
 #include <Eigen/Geometry>
@@ -65,14 +67,77 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     this->UV.resize(0, 0);
 
     // read triangle mesh and colors if available
-    // return false if not .ply
+    std::string term = filename.substr(filename.find_last_of('.') + 1);
 
-    bool success = igl::readPLY(filename, this->vertices, this->faces, this->edges, this->Normals, this->UV);
+    bool success = false;
+    if (term == "ply")
+        success = igl::readPLY(filename, this->vertices, this->faces, this->edges, this->Normals, this->UV);
+    else if (term == "obj")
+    {
+        Eigen::MatrixXi FTC;
+        Eigen::MatrixXi FN;
+        success = igl::readOBJ(filename, this->vertices, this->UV, this->Normals, this->faces, FTC, FN);
+    }
+    else if (term == "off")
+    {
+        std::vector<std::vector<double>> vV;
+        std::vector<std::vector<int>> vF;
+        std::vector<std::vector<double>> vN;
+        std::vector<std::vector<double>> vUV;
+        success = igl::readOFF(filename, vV, vF, vN, vUV);
+
+        if (success)
+        {
+            // Convert to Eigen matrices
+            this->vertices.resize(vV.size(), 3);
+            for (size_t i = 0; i < vV.size(); ++i)
+            {
+                this->vertices(i, 0) = vV[i][0];
+                this->vertices(i, 1) = vV[i][1];
+                this->vertices(i, 2) = vV[i][2];
+            }
+
+            this->faces.resize(vF.size(), 3);
+            for (size_t i = 0; i < vF.size(); ++i)
+            {
+                this->faces(i, 0) = vF[i][0];
+                this->faces(i, 1) = vF[i][1];
+                this->faces(i, 2) = vF[i][2];
+            }
+
+            if (!vN.empty())
+            {
+                this->Normals.resize(vN.size(), 3);
+                for (size_t i = 0; i < vN.size(); ++i)
+                {
+                    this->Normals(i, 0) = vN[i][0];
+                    this->Normals(i, 1) = vN[i][1];
+                    this->Normals(i, 2) = vN[i][2];
+                }
+            }
+
+            if (!vUV.empty())
+            {
+                this->UV.resize(vUV.size(), 2);
+                for (size_t i = 0; i < vUV.size(); ++i)
+                {
+                    this->UV(i, 0) = vUV[i][0];
+                    this->UV(i, 1) = vUV[i][1];
+                }
+            }
+        }
+    }
+
     if (success)
     {
         std::cout << "[Voxelizer] Successfully loaded mesh from " << filename << " with "
                   << this->vertices.rows() << " vertices and "
                   << this->faces.rows() << " faces" << std::endl;
+    }
+    else
+    {
+        std::cout << "[Voxelizer] Failed to load mesh from " << filename << std::endl;
+        return false;
     }
 
     // Get extents and min bounds

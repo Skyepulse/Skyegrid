@@ -3,3 +3,5 @@ build/
 build-web/
 *.bat
 *.sh
+data/
+*.blend

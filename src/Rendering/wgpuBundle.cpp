@@ -34,6 +34,13 @@ WgpuBundle::WgpuBundle(WindowFormat windowFormat) : window(windowFormat.window),
 WgpuBundle::~WgpuBundle()
 {
     std::cout << "[wgpuBundle][Shutdown] Cleaning up WebGPU resources..." << std::endl;
+
+    if (this->surface)
+    {
+        this->surface.Unconfigure();
+        this->surface = nullptr;  // Release surface while device is still valid
+    }
+
     // Wait for all GPU work to complete before destroying resources
     if (this->device)
     {
@@ -46,11 +53,8 @@ WgpuBundle::~WgpuBundle()
             );
             this->instance.WaitAny(workDoneFuture, UINT64_MAX);
         }
-    }
-
-    // Destroy device first
-    if (this->device)
         this->device.Destroy();
+    }
 }
 
 //================================//

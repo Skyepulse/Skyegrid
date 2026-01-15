@@ -47,10 +47,12 @@ int main(int argc, char** argv)
         fileName = argv[3];
     }
 
-    SkyegridManager manager(false, value1, value2);
-    manager.LoadVoxelFile(fileName);
-    manager.InitGraphics();
-    manager.RunMainLoop();
+    std::unique_ptr<SkyegridManager> manager = std::make_unique<SkyegridManager>(false, value1, value2);
+    manager->LoadVoxelFile(fileName);
+    manager->InitGraphics();
+    manager->RunMainLoop();
+
+    manager.reset();
 
     std::cout << "Exiting application.\n";
     return 0;

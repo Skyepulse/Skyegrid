@@ -50,10 +50,10 @@ SkyegridManager::SkyegridManager(bool debugMode, int voxelResolution, int maxVis
 //================================//
 SkyegridManager::~SkyegridManager()
 {
-    this->window.reset();
+
     this->renderEngine.reset();
     this->wgpuBundle.reset();
-    
+    this->window.reset();
     glfwTerminate();
 }
 

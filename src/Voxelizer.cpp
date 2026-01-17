@@ -448,7 +448,7 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
 void Voxelizer::checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPass, uint8_t& numPasses)
 {
     const uint64_t colorBytesPerBrick = sizeof(uint32_t) * 8 * 8 * 8;
-    uint64_t maxBufferSize = this->gpuBundle->GetLimits().maxBufferSize * 0.6;
+    uint64_t maxBufferSize = this->gpuBundle->GetLimits().maxBufferSize;
     uint64_t maxColorBufferSize = (maxBufferSize / static_cast<uint64_t>(colorBytesPerBrick)) * static_cast<uint64_t>(colorBytesPerBrick);
 
     if(voxelResolution <= 0) voxelResolution = 8;
@@ -458,7 +458,7 @@ void Voxelizer::checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPas
     uint32_t brickResolution = voxelResolution / 8;
     if(brickResolution > maxBrickResolution)
     {
-        brickResolution = maxBrickResolution - 1;
+        brickResolution = maxBrickResolution;
         voxelResolution = brickResolution * 8;
         std::cout << "[Voxelizer] Warning: Voxel resolution too high, clamped to " << voxelResolution << std::endl;
     }

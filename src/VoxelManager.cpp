@@ -195,28 +195,35 @@ void VoxelManager::loadFile(const std::string& filename)
 //================================//
 void VoxelManager::startDiskReaderThread()
 {
+#ifdef __EMSCRIPTEN__
+    // On web, we read synchronously (file is already in memory via preload)
+    diskReaderThreadRunning.store(true);
+    // Don't start a thread - we'll process reads synchronously
+#else
     diskReaderThreadRunning.store(true);
     diskReaderThread = std::thread(&VoxelManager::diskReaderThreadFunc, this);
+#endif
 }
 
 //================================//
 void VoxelManager::stopDiskReaderThread()
 {
+#ifndef __EMSCRIPTEN__
     if (diskReaderThreadRunning.load())
     {
         diskReaderThreadRunning.store(false);
-        
-        // Wake up the thread if it's waiting
         {
             std::lock_guard<std::mutex> lock(diskReadQueueMutex);
             diskReadQueueCV.notify_all();
         }
-        
         if (diskReaderThread.joinable())
         {
             diskReaderThread.join();
         }
     }
+#else
+    diskReaderThreadRunning.store(false);
+#endif
 }
 
 //================================//
@@ -245,13 +252,81 @@ void VoxelManager::clearDiskReadQueues()
 //================================//
 void VoxelManager::queueDiskRead(uint32_t brickGridIndex)
 {
+#ifdef __EMSCRIPTEN__
+    // Process immediately on web (synchronous read from virtual FS)
+    processSingleDiskRead(brickGridIndex);
+#else
     {
         std::lock_guard<std::mutex> lock(diskReadQueueMutex);
         diskReadRequestQueue.push(brickGridIndex);
     }
-    
     diskReadQueueCV.notify_one();
+#endif
 }
+
+//================================//
+#ifdef __EMSCRIPTEN__
+void VoxelManager::processSingleDiskRead(uint32_t brickGridIndex)
+{
+    DiskReadResult result;
+    result.brickGridIndex = brickGridIndex;
+    result.success = false;
+    std::memset(result.occupancy, 0, sizeof(result.occupancy));
+    std::memset(result.colors, 0, sizeof(result.colors));
+
+    if (loadedMesh && voxelFileReader)
+    {
+        brickDataEntry diskData;
+        if (voxelFileReader->getBrickData(brickGridIndex, diskData))
+        {
+            std::memcpy(result.occupancy, diskData.occupancy, sizeof(result.occupancy));
+            
+            size_t colorIndex = 0;
+            for (int z = 0; z < 8 && colorIndex < diskData.colors.size(); ++z)
+            {
+                uint32_t firstSliceHalf = diskData.occupancy[2 * z];
+                uint32_t secondSliceHalf = diskData.occupancy[2 * z + 1];
+                uint64_t slice = (static_cast<uint64_t>(secondSliceHalf) << 32) | static_cast<uint64_t>(firstSliceHalf);
+                
+                for (int bit = 0; bit < 64 && slice != 0; bit++)
+                {
+                    if (slice & (1ull << bit))
+                    {
+                        int voxelIndex = z * 64 + bit;
+                        if (colorIndex < diskData.colors.size())
+                        {
+                            result.colors[voxelIndex].r = diskData.colors[colorIndex].r;
+                            result.colors[voxelIndex].g = diskData.colors[colorIndex].g;
+                            result.colors[voxelIndex].b = diskData.colors[colorIndex].b;
+                            result.colors[voxelIndex]._pad = 0;
+                            ++colorIndex;
+                        }
+                    }
+                }
+            }
+            result.success = true;
+        }
+    }
+
+    if (!result.success)
+    {
+        result.occupancy[0] = 1u;
+        result.colors[0] = {
+            static_cast<uint8_t>(rand() % 256),
+            static_cast<uint8_t>(rand() % 256),
+            static_cast<uint8_t>(rand() % 256),
+            0
+        };
+        result.success = true;
+    }
+
+    // Add directly to result queue
+    {
+        std::lock_guard<std::mutex> lock(diskReadResultMutex);
+        diskReadResultQueue.push(std::move(result));
+    }
+}
+#endif
 
 //================================//
 void VoxelManager::diskReaderThreadFunc()

@@ -240,6 +240,10 @@ private:
     void queueDiskRead(uint32_t brickGridIndex);
     void processCompletedDiskReads();
 
+#ifdef __EMSCRIPTEN__
+    void processSingleDiskRead(uint32_t brickGridIndex);
+#endif
+
     int voxelResolution; 
     int BrickResolution;
     int maxVisibleBricks;

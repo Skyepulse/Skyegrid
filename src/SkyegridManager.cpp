@@ -18,8 +18,15 @@ SkyegridManager::SkyegridManager(bool debugMode, int voxelResolution, int maxVis
         return;
     }
 
+#ifdef __EMSCRIPTEN__
+    const char* windowTarget = "#canvas";
+#else
+    const char* windowTarget = "Skyegrid";
+#endif
+
+
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    this->window.reset(glfwCreateWindow(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT, "Skyegrid", nullptr, nullptr));
+    this->window.reset(glfwCreateWindow(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT, windowTarget, nullptr, nullptr));
 
      GLFWwindow* window = this->window.get();
 

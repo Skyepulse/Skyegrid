@@ -178,6 +178,26 @@ ColorRGB VoxelManager::computeBrickAverageColor(const BrickMapCPU& brick)
 //================================//
 void VoxelManager::loadFile(const std::string& filename)
 {
+    std::cout << "[VoxelManager] Attempting to load: " << filename << std::endl;
+    
+#ifdef __EMSCRIPTEN__
+    std::cout << "[VoxelManager] Checking if file exists in virtual FS..." << std::endl;
+    
+    FILE* f = fopen(filename.c_str(), "rb");
+    if (f) 
+    {
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        fclose(f);
+        std::cout << "[VoxelManager] File found! Size: " << size << " bytes" << std::endl;
+    } 
+    else 
+    {
+        std::cout << "[VoxelManager] File NOT found: " << filename << std::endl;
+        std::cout << "[VoxelManager] errno: " << errno << " - " << strerror(errno) << std::endl;
+    }
+#endif
+
     // Does file exist?
     std::ifstream fileCheck(filename, std::ios::binary);
     if (!fileCheck)

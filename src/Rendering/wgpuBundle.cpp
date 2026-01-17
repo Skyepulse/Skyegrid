@@ -120,8 +120,8 @@ void WgpuBundle::InitializeInstance()
     std::cout << "[wgpuBundle][Init] Using adapter: " << info.description << std::endl;
     std::cout << "[wgpuBundle][Init] Using device: " << info.device << std::endl;
     std::cout << "[wgpuBundle][Init] Device limits: " << std::endl;
-    std::cout << "  - Max buffer size: " << this->limits.maxBufferSize << std::endl;
-    std::cout << "  - Max storage buffer binding size: " << this->limits.maxStorageBufferBindingSize << std::endl;
+    std::cout << "  - Max buffer size: " << this->limits.maxBufferSize << " GB: " << static_cast<double>(this->limits.maxBufferSize) / (1024 * 1024 * 1024) << std::endl;
+    std::cout << "  - Max storage buffer binding size: " << this->limits.maxStorageBufferBindingSize <<  " GB: " << static_cast<double>(this->limits.maxStorageBufferBindingSize) / (1024 * 1024 * 1024) << std::endl;
     std::cout << "[wgpuBundle][Init] Backend: " << static_cast<uint32_t>(info.backendType) << std::endl;
 }
 
@@ -154,28 +154,8 @@ void WgpuBundle::ConfigureSurface()
 //================================//
 void WgpuBundle::ComputeLimits()
 {
-    this->limits.maxStorageTexturesPerShaderStage =
-        std::max(this->limits.maxStorageTexturesPerShaderStage, 2u);
-
-    this->limits.maxTextureDimension2D =
-        std::max(this->limits.maxTextureDimension2D,
-                 static_cast<uint32_t>(
-                     std::max(MAXIMUM_WINDOW_WIDTH, MAXIMUM_WINDOW_HEIGHT)));
-
-    this->limits.maxUniformBuffersPerShaderStage =
-        std::max(this->limits.maxUniformBuffersPerShaderStage, 1u);
-    this->limits.maxUniformBufferBindingSize =
-        std::max(static_cast<uint32_t>(this->limits.maxUniformBufferBindingSize), 256u);
-
-    this->limits.maxComputeWorkgroupSizeX =
-        std::max(this->limits.maxComputeWorkgroupSizeX, 8u);
-    this->limits.maxComputeWorkgroupSizeY =
-        std::max(this->limits.maxComputeWorkgroupSizeY, 8u);
-    this->limits.maxComputeWorkgroupSizeZ =
-        std::max(this->limits.maxComputeWorkgroupSizeZ, 1u);
-
-    this->limits.maxComputeInvocationsPerWorkgroup =
-        std::max(this->limits.maxComputeInvocationsPerWorkgroup, 128u);
+    this->limits.maxBufferSize = std::min(this->limits.maxBufferSize, static_cast<uint64_t>(MAX_BUFFER_SIZE));
+    this->limits.maxBufferSize = std::min(this->limits.maxBufferSize, this->limits.maxStorageBufferBindingSize);
 }
 
 //================================//

@@ -94,8 +94,9 @@ void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int ma
     // [2] check if the resolution forces a number of bricks higher than 24 bit encoding, max possible for our brick grid
     int brickResolution = resolution / 8;
     uint64_t numBricks = static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution);
-    if (numBricks > MAX_BRICKS)
+    if (numBricks > MAX_BRICKS + 1)
     {
+        std::cout << "[VoxelManager] Voxel resolution " << resolution << " results in " << numBricks << " bricks, which exceeds the maximum of " << MAX_BRICKS << " bricks supported." << std::endl;
         // reduce resolution until it fits
         while (numBricks >= MAX_BRICKS)
         {
@@ -103,6 +104,7 @@ void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int ma
             brickResolution = resolution / 8;
             numBricks = static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution);
         }
+        std::cout << "[VoxelManager] Voxel resolution too high, clamped to " << resolution << " to fit in brick grid." << std::endl;
     }
 
     this->voxelResolution = resolution;
@@ -937,7 +939,7 @@ void VoxelManager::initDynamicBuffers(WgpuBundle& wgpuBundle)
             remaining -= std::min(poolSize, remaining);
 
             desc.size  = bufferSize;
-            std::cout << "[VoxelManager] Creating Color Pool Buffer " << i << " of size " << desc.size / 1024 << " KB\n";
+            std::cout << "[VoxelManager] Creating Color Pool Buffer " << i << " of size " << static_cast<double>(desc.size) / (1024 * 1024 * 1024) << " GB\n";
             desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
             desc.label =
                 ("Color Pool Buffer " + std::to_string(i)).c_str();

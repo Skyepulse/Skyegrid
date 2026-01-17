@@ -12,4 +12,6 @@ constexpr int INITIAL_WINDOW_HEIGHT = 1080;
 constexpr size_t COMPUTE_VOXEL_UNIFORM_SIZE = 16;
 constexpr bool HAS_VOXEL_COLOR = true;
 
+constexpr uint32_t MAX_BUFFER_SIZE = UINT32_MAX - 1;
+
 #endif // CONSTANTS_HPP

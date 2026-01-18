@@ -6,7 +6,7 @@
 #include <emscripten.h>
 #endif
 
-const int voxel_resolution = 512;
+const int voxel_resolution = 1024;
 const int max_visible_bricks = 100000;
 
 #ifdef __EMSCRIPTEN__

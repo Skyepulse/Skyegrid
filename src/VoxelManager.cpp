@@ -450,11 +450,18 @@ void VoxelManager::diskReaderThreadFunc()
 // that are ready to be uploaded to GPU
 void VoxelManager::processCompletedDiskReads()
 {
+#ifdef __EMSCRIPTEN__
+    std::cout << "[Debug] diskReadResultQueue size: " << diskReadResultQueue.size() 
+              << ", freeBrickSlots: " << freeBrickSlots.size() << std::endl;
+#endif
     const uint32_t maxValidIndex = static_cast<uint32_t>(brickGridCPU.size());
     int processedCount = 0;
+    int iterationCount = 0;
+    const int maxIterations = MAX_READY_BRICKS * 2;
 
-    while (processedCount < MAX_READY_BRICKS)
+    while (processedCount < MAX_READY_BRICKS && iterationCount < maxIterations)
     {
+        iterationCount++;
         DiskReadResult result;
 
         // Get the completed read from complete queue
@@ -483,6 +490,12 @@ void VoxelManager::processCompletedDiskReads()
         {
             if (freeBrickSlots.empty())
             {
+                brickCell.reading = true;
+                brickCell.pendingRead = true;
+                {
+                    std::lock_guard<std::mutex> lock(diskReadResultMutex);
+                    diskReadResultQueue.push(std::move(result));
+                }
                 continue;
             }
             
@@ -506,15 +519,26 @@ void VoxelManager::processCompletedDiskReads()
 //================================//
 void VoxelManager::startOfFrame()
 {
-    // At the start of the frame, reset dirty brick indices
-    dirtyBrickIndices.clear();
     pendingUploadCount = 0;
+    std::vector<uint32_t> stillDirty;
+    for (uint32_t idx : dirtyBrickIndices)
+    {
+        if (idx < brickGridCPU.size() && brickGridCPU[idx].dirty && brickGridCPU[idx].onGPU)
+        {
+            stillDirty.push_back(idx);
+        }
+    }
+    dirtyBrickIndices = std::move(stillDirty);
 
     // Process any completed disk reads AKA read from complete read queues
     processCompletedDiskReads();
 
     // Process any pending feedback that was read from previous frames
     processPendingFeedback();
+
+#ifdef __EMSCRIPTEN__
+    processCompletedDiskReads(); // On web, process reads immediately since we do synchronous reads
+#endif
 }
 
 //================================//

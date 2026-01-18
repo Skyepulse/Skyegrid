@@ -5,3 +5,4 @@ build-web/
 *.sh
 data/
 *.blend
+index.html

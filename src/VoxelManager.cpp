@@ -75,9 +75,6 @@ void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int ma
         uint64_t maxTotalVisibleColorSize = uint64_t(MAX_COLOR_POOLS) * maxColorBufferSize;
         uint64_t maxVisibleBricksPossible = maxTotalVisibleColorSize / COLOR_BYTES_PER_BRICK;
 
-        std::cout << "[VoxelManager] Max visible bricks possible with current device limits: " << maxVisibleBricksPossible << std::endl;
-        std::cout << "We wanted to have... " << maxVisibleBricks << " visible bricks." << std::endl;
-
         // [1] clamp the max visible bricks to the possible maximum, with our 3 color pools
         maxVisibleBricks = std::min(static_cast<uint64_t>(maxVisibleBricks), maxVisibleBricksPossible - 1);
     }
@@ -96,7 +93,6 @@ void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int ma
     uint64_t numBricks = static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution);
     if (numBricks > MAX_BRICKS + 1)
     {
-        std::cout << "[VoxelManager] Voxel resolution " << resolution << " results in " << numBricks << " bricks, which exceeds the maximum of " << MAX_BRICKS << " bricks supported." << std::endl;
         // reduce resolution until it fits
         while (numBricks >= MAX_BRICKS)
         {
@@ -104,7 +100,6 @@ void VoxelManager::validateResolution(WgpuBundle& bundle, int resolution, int ma
             brickResolution = resolution / 8;
             numBricks = static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution) * static_cast<uint64_t>(brickResolution);
         }
-        std::cout << "[VoxelManager] Voxel resolution too high, clamped to " << resolution << " to fit in brick grid." << std::endl;
     }
 
     this->voxelResolution = resolution;
@@ -177,27 +172,7 @@ ColorRGB VoxelManager::computeBrickAverageColor(const BrickMapCPU& brick)
 // DISK READER THREAD METHODS
 //================================//
 void VoxelManager::loadFile(const std::string& filename)
-{
-    std::cout << "[VoxelManager] Attempting to load: " << filename << std::endl;
-    
-#ifdef __EMSCRIPTEN__
-    std::cout << "[VoxelManager] Checking if file exists in virtual FS..." << std::endl;
-    
-    FILE* f = fopen(filename.c_str(), "rb");
-    if (f) 
-    {
-        fseek(f, 0, SEEK_END);
-        long size = ftell(f);
-        fclose(f);
-        std::cout << "[VoxelManager] File found! Size: " << size << " bytes" << std::endl;
-    } 
-    else 
-    {
-        std::cout << "[VoxelManager] File NOT found: " << filename << std::endl;
-        std::cout << "[VoxelManager] errno: " << errno << " - " << strerror(errno) << std::endl;
-    }
-#endif
-
+{ 
     // Does file exist?
     std::ifstream fileCheck(filename, std::ios::binary);
     if (!fileCheck)
@@ -208,19 +183,15 @@ void VoxelManager::loadFile(const std::string& filename)
 
     this->voxelFileReader = std::make_unique<VoxelFileReader>(filename);
     this->loadedMesh = true;
-
-    std::cout << "[VoxelManager] Voxel file " << filename << " loaded. Resolution: " << this->voxelFileReader->getResolution() << std::endl;
 }
 
 //================================//
 void VoxelManager::startDiskReaderThread()
 {
-#ifdef __EMSCRIPTEN__
-    // On web, we read synchronously (file is already in memory via preload)
     diskReaderThreadRunning.store(true);
-    // Don't start a thread - we'll process reads synchronously
-#else
-    diskReaderThreadRunning.store(true);
+
+    // NO THREADING ON WEB, need to read synchronously
+#ifndef __EMSCRIPTEN__
     diskReaderThread = std::thread(&VoxelManager::diskReaderThreadFunc, this);
 #endif
 }
@@ -450,18 +421,11 @@ void VoxelManager::diskReaderThreadFunc()
 // that are ready to be uploaded to GPU
 void VoxelManager::processCompletedDiskReads()
 {
-#ifdef __EMSCRIPTEN__
-    std::cout << "[Debug] diskReadResultQueue size: " << diskReadResultQueue.size() 
-              << ", freeBrickSlots: " << freeBrickSlots.size() << std::endl;
-#endif
     const uint32_t maxValidIndex = static_cast<uint32_t>(brickGridCPU.size());
     int processedCount = 0;
-    int iterationCount = 0;
-    const int maxIterations = MAX_READY_BRICKS * 2;
 
-    while (processedCount < MAX_READY_BRICKS && iterationCount < maxIterations)
+    while (processedCount < MAX_READY_BRICKS)
     {
-        iterationCount++;
         DiskReadResult result;
 
         // Get the completed read from complete queue
@@ -535,10 +499,6 @@ void VoxelManager::startOfFrame()
 
     // Process any pending feedback that was read from previous frames
     processPendingFeedback();
-
-#ifdef __EMSCRIPTEN__
-    processCompletedDiskReads(); // On web, process reads immediately since we do synchronous reads
-#endif
 }
 
 //================================//

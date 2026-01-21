@@ -52,7 +52,6 @@ class RenderEngine
 public:
     RenderEngine(WgpuBundle* bundle, int voxelResolution, int maxVisibleBricks)
     {
-        std::cout << "[RenderEngine] Initializing Render Engine...\n";
         this->wgpuBundle = bundle;
         
         // Create Voxel Manager
@@ -75,20 +74,16 @@ public:
         // Initialize GPU Timing Queries
         this->InitializeGPUTimingQueries();
 
-        std::cout << "[RenderEngine] Creating Pipelines...\n";
         CreateRenderPipelineDebug(*this->wgpuBundle, this->debugPipeline);
         CreateComputeVoxelPipeline(*this->wgpuBundle, this->computeVoxelPipeline, MAX_COLOR_POOLS);
         CreateComputeUploadVoxelPipeline(*this->wgpuBundle, this->computeUploadVoxelPipeline, MAX_COLOR_POOLS);
         CreateBlitVoxelPipeline(*this->wgpuBundle, this->blitVoxelPipeline);
-        std::cout << "[RenderEngine] Creating pipelines completed.\n";
 
-        std::cout << "[RenderEngine] Initializing Voxel Manager...\n";
         this->voxelManager->initStaticBuffers(*this->wgpuBundle);
         this->voxelManager->initDynamicBuffers(*this->wgpuBundle);
         this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 
         InitImGui();
-        std::cout << "[RenderEngine] Render Engine initialized successfully.\n";
     }
 
     void Render(void* userData);

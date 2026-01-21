@@ -7,7 +7,6 @@
 //================================//
 void RenderEngine::InitImGui()
 {
-    std::cout << "[RenderEngine] Initializing ImGui...\n";
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -34,7 +33,6 @@ void RenderEngine::InitImGui()
     this->visibleBricksDigitBoxValue = this->visibleBricksSliderValue;
 
     ImGui_ImplWGPU_Init(&init_info);
-    std::cout << "[RenderEngine] ImGui initialized successfully.\n";
 }
 
 //================================//

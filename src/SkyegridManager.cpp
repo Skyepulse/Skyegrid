@@ -153,9 +153,6 @@ void SkyegridManager::ProcessEvents(float deltaTime)
     camera->Rotate(rotationDelta);
     camera->Move(movementDelta);
 
-    if (glfwGetKey(this->window.get(), GLFW_KEY_R) == GLFW_PRESS)
-        std::cout << "[SkyegridManager] Camera Position: " << camera->GetPosition().transpose() << std::endl;
-
     WindowFormat currentFormat = this->wgpuBundle->GetWindowFormat();
     this->renderInfo.width = static_cast<uint32_t>(currentFormat.width);
     this->renderInfo.height = static_cast<uint32_t>(currentFormat.height);
@@ -198,7 +195,5 @@ void SkyegridManager::AccumulateFrameRate()
             sum += fr;
         this->frameRate = sum / static_cast<float>(this->frameRateAccumulator.size());
         this->frameRateAccumulator.clear();
-
-        std::cout << "[SkyegridManager] Average Frame Rate: " << this->frameRate << " FPS" << std::endl;
     }
 }

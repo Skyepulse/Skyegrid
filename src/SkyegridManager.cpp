@@ -123,31 +123,28 @@ void SkyegridManager::ProcessEvents(float deltaTime)
     }
 
     Eigen::Vector3f rotationDelta(0.0f, 0.0f, 0.0f);
-    if (glfwGetKey(this->window.get(), GLFW_KEY_Q) == GLFW_PRESS)
+    if (glfwGetKey(this->window.get(), GLFW_KEY_LEFT) == GLFW_PRESS)
         rotationDelta.y() -= rotationSpeed * deltaTime * 60.0f;
-    if (glfwGetKey(this->window.get(), GLFW_KEY_E) == GLFW_PRESS)
+    if (glfwGetKey(this->window.get(), GLFW_KEY_RIGHT) == GLFW_PRESS)
         rotationDelta.y() += rotationSpeed * deltaTime * 60.0f;
 
     Eigen::Vector3f movementDelta(0.0f, 0.0f, 0.0f);
-    if (glfwGetKey(this->window.get(), GLFW_KEY_W) == GLFW_PRESS)
+    if (glfwGetKey(this->window.get(), GLFW_KEY_W) == GLFW_PRESS || glfwGetKey(this->window.get(), GLFW_KEY_Z) == GLFW_PRESS)
         movementDelta.z() += moveSpeed * deltaTime * 60.0f;
     if (glfwGetKey(this->window.get(), GLFW_KEY_S) == GLFW_PRESS)
         movementDelta.z() -= moveSpeed * deltaTime * 60.0f;
-    if (glfwGetKey(this->window.get(), GLFW_KEY_A) == GLFW_PRESS)
+    if (glfwGetKey(this->window.get(), GLFW_KEY_A) == GLFW_PRESS || glfwGetKey(this->window.get(), GLFW_KEY_Q) == GLFW_PRESS)
         movementDelta.x() -= moveSpeed * deltaTime * 60.0f;
     if (glfwGetKey(this->window.get(), GLFW_KEY_D) == GLFW_PRESS)
         movementDelta.x() += moveSpeed * deltaTime * 60.0f;
     //Z, x for up and down
-    if (glfwGetKey(this->window.get(), GLFW_KEY_Z) == GLFW_PRESS)
+    if (glfwGetKey(this->window.get(), GLFW_KEY_DOWN) == GLFW_PRESS)
         movementDelta.y() += moveSpeed * deltaTime * 60.0f;
-    if (glfwGetKey(this->window.get(), GLFW_KEY_X) == GLFW_PRESS)
+    if (glfwGetKey(this->window.get(), GLFW_KEY_UP) == GLFW_PRESS)
         movementDelta.y() -= moveSpeed * deltaTime * 60.0f;
     
     camera->Rotate(rotationDelta);
     camera->Move(movementDelta);
-
-    if (glfwGetKey(this->window.get(), GLFW_KEY_R) == GLFW_PRESS)
-        std::cout << "[SkyegridManager] Camera Position: " << camera->GetPosition().transpose() << std::endl;
 
     WindowFormat currentFormat = this->wgpuBundle->GetWindowFormat();
     this->renderInfo.width = static_cast<uint32_t>(currentFormat.width);

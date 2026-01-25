@@ -129,9 +129,10 @@ fn barycentric(p: vec3<f32>, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> vec
         return vec3<f32>(1.0, 0.0, 0.0);
     }
     
-    let v = (d11 * d20 - d01 * d21) / denom;
-    let w = (d00 * d21 - d01 * d20) / denom;
+    var v = (d11 * d20 - d01 * d21) / denom;
+    var w = (d00 * d21 - d01 * d20) / denom;
 
+    // Make sure to clamp v and w
     v = clamp(v, 0.0, 1.0);
     w = clamp(w, 0.0, 1.0);
     if (v + w > 1.0) {

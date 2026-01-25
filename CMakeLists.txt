@@ -2,10 +2,8 @@ cmake_minimum_required(VERSION 4.0)
 project(Skyegrid)
 set(CMAKE_CXX_STANDARD 20)
 
-# Old policy to fetch IGL's Eigen
-if(POLICY CMP0169)
-  cmake_policy(SET CMP0169 OLD)
-endif()
+# Necessary to work for assimp and dawn
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 set(SRC_FILES
   skyegrid.cpp
@@ -24,13 +22,13 @@ set(SRC_FILES
   src/Rendering/Camera/Camera.cpp
   src/VoxelManager.cpp
   includes/VoxelManager.hpp
-  includes/Voxelizer.hpp
-  src/Voxelizer.cpp
+  includes/VoxelIO.hpp
 )
 
 set(VOXELIZER_SRC_FILES
   main_voxelize.cpp
   includes/Voxelizer.hpp
+  includes/VoxelIO.hpp
   includes/Rendering/wgpuHelpers.hpp
   src/Rendering/wgpuHelpers.cpp
   src/Voxelizer.cpp
@@ -45,13 +43,19 @@ add_executable(Voxelizer ${VOXELIZER_SRC_FILES})
 
 include(FetchContent)
 
-# IGL
+# Assimp
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+
 FetchContent_Declare(
-  libigl
-  GIT_REPOSITORY https://github.com/libigl/libigl.git
-  GIT_TAG        v2.6.0
+  assimp
+  GIT_REPOSITORY https://github.com/assimp/assimp.git
+  GIT_TAG        v5.4.3
 )
-FetchContent_MakeAvailable(libigl)
+FetchContent_MakeAvailable(assimp)
 
 # ImGUI
 FetchContent_Declare(
@@ -60,6 +64,14 @@ FetchContent_Declare(
   GIT_TAG        v1.92.5
 )
 FetchContent_MakeAvailable(imgui)
+
+#Eigen
+FetchContent_Declare(
+  eigen
+  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+  GIT_TAG        3.4.0
+)
+FetchContent_MakeAvailable(eigen)
 
 # SKYEGRID CONFIGURATION
 
@@ -83,6 +95,7 @@ target_include_directories(Skyegrid PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${CMAKE_SOURCE_DIR}/includes
+    ${eigen_SOURCE_DIR}
 )
 
 # VOXELIZER CONFIGURATION
@@ -90,8 +103,6 @@ target_include_directories(Voxelizer PRIVATE
     ${CMAKE_SOURCE_DIR}/includes
     ${stb_SOURCE_DIR}  # For stb_image.h
 )
-target_link_libraries(Voxelizer PRIVATE igl::core)
-
 # DAWN SPECIFICS
 
 set(DAWN_ROOT "${CMAKE_SOURCE_DIR}/dawn")
@@ -111,11 +122,11 @@ if(EMSCRIPTEN)
 
   set(DCMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "" FORCE) # Disable C++ modules for Emscripten
   set_target_properties(Skyegrid PROPERTIES SUFFIX ".html")
-  target_link_libraries(Skyegrid PRIVATE emdawnwebgpu_cpp webgpu_glfw igl::core)
+  target_link_libraries(Skyegrid PRIVATE emdawnwebgpu_cpp webgpu_glfw)
   target_link_options(Skyegrid PRIVATE "-sINITIAL_MEMORY=64MB" "-sALLOW_MEMORY_GROWTH=1" "-sASYNCIFY=1" "-sUSE_GLFW=3" "--preload-file=${CMAKE_SOURCE_DIR}/Shaders@/Shaders")
 
   set_target_properties(Voxelizer PROPERTIES SUFFIX ".html")
-  target_link_libraries(Voxelizer PRIVATE emdawnwebgpu_cpp webgpu_glfw igl::core)
+  target_link_libraries(Voxelizer PRIVATE emdawnwebgpu_cpp webgpu_glfw assimp)
   target_link_options(Voxelizer PRIVATE "-sINITIAL_MEMORY=64MB" "-sALLOW_MEMORY_GROWTH=1" "-sASYNCIFY=1" "-sUSE_GLFW=3" "--preload-file=${CMAKE_SOURCE_DIR}/Shaders@/Shaders")
 
 else()
@@ -133,7 +144,6 @@ else()
       webgpu_dawn
       webgpu_glfw
       glfw
-      igl::core
   )
 
   target_link_libraries(
@@ -142,14 +152,16 @@ else()
       webgpu_dawn
       webgpu_glfw
       glfw
-      igl::core
+      assimp
   )
   
-  add_custom_command(TARGET Skyegrid POST_BUILD
+  add_custom_target(copy_shaders ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       ${CMAKE_SOURCE_DIR}/Shaders
       $<TARGET_FILE_DIR:Skyegrid>/Shaders
+    COMMENT "Copying shaders to output directory"
   )
+  add_dependencies(copy_shaders Skyegrid)
 
 endif()
 

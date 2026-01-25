@@ -3,7 +3,7 @@
 
 #include "../includes/Rendering/Pipelines/pipelines.hpp"
 #include "../includes/constants.hpp"
-#include "../includes/Voxelizer.hpp"
+#include "../includes/VoxelIO.hpp"
 #include <cstdint>
 #include <vector>
 #include <array>

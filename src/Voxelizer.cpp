@@ -1,11 +1,12 @@
 #include "../includes/Voxelizer.hpp"
+#include "../includes/VoxelIO.hpp"
 
-#include <igl/readPLY.h>
-#include <igl/readOBJ.h>
-#include <igl/readOFF.h>
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
 #include <iostream>
 #include <filesystem>
-#include <Eigen/Geometry>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h" 
@@ -60,92 +61,133 @@ static bool safeTextureLoad(const std::string& texturePath, unsigned char** text
 //================================//
 bool Voxelizer::loadMesh(const std::string& filename, const std::string& texturePath)
 {
-    this->vertices.resize(0, 0);
-    this->faces.resize(0, 0);
-    this->edges.resize(0, 0);
-    this->Normals.resize(0, 0);
-    this->UV.resize(0, 0);
+    this->verticesVec.clear();
+    this->facesVec.clear();
+    this->normalsVec.clear();
+    this->uvsVec.clear();
 
-    // read triangle mesh and colors if available
-    std::string term = filename.substr(filename.find_last_of('.') + 1);
+    Assimp::Importer importer;
+    
+    const aiScene* scene = importer.ReadFile(filename,
+        aiProcess_Triangulate |
+        // aiProcess_FlipUVs |
+        aiProcess_GenNormals |
+        aiProcess_JoinIdenticalVertices
+    );
 
-    bool success = false;
-    if (term == "ply")
-        success = igl::readPLY(filename, this->vertices, this->faces, this->edges, this->Normals, this->UV);
-    else if (term == "obj")
+    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
     {
-        Eigen::MatrixXi FTC;
-        Eigen::MatrixXi FN;
-        success = igl::readOBJ(filename, this->vertices, this->UV, this->Normals, this->faces, FTC, FN);
-    }
-    else if (term == "off")
-    {
-        std::vector<std::vector<double>> vV;
-        std::vector<std::vector<int>> vF;
-        std::vector<std::vector<double>> vN;
-        std::vector<std::vector<double>> vUV;
-        success = igl::readOFF(filename, vV, vF, vN, vUV);
-
-        if (success)
-        {
-            // Convert to Eigen matrices
-            this->vertices.resize(vV.size(), 3);
-            for (size_t i = 0; i < vV.size(); ++i)
-            {
-                this->vertices(i, 0) = vV[i][0];
-                this->vertices(i, 1) = vV[i][1];
-                this->vertices(i, 2) = vV[i][2];
-            }
-
-            this->faces.resize(vF.size(), 3);
-            for (size_t i = 0; i < vF.size(); ++i)
-            {
-                this->faces(i, 0) = vF[i][0];
-                this->faces(i, 1) = vF[i][1];
-                this->faces(i, 2) = vF[i][2];
-            }
-
-            if (!vN.empty())
-            {
-                this->Normals.resize(vN.size(), 3);
-                for (size_t i = 0; i < vN.size(); ++i)
-                {
-                    this->Normals(i, 0) = vN[i][0];
-                    this->Normals(i, 1) = vN[i][1];
-                    this->Normals(i, 2) = vN[i][2];
-                }
-            }
-
-            if (!vUV.empty())
-            {
-                this->UV.resize(vUV.size(), 2);
-                for (size_t i = 0; i < vUV.size(); ++i)
-                {
-                    this->UV(i, 0) = vUV[i][0];
-                    this->UV(i, 1) = vUV[i][1];
-                }
-            }
-        }
-    }
-
-    if (success)
-    {
-        std::cout << "[Voxelizer] Successfully loaded mesh from " << filename << " with "
-                  << this->vertices.rows() << " vertices and "
-                  << this->faces.rows() << " faces" << std::endl;
-    }
-    else
-    {
-        std::cout << "[Voxelizer] Failed to load mesh from " << filename << std::endl;
+        std::cout << "[Voxelizer] Failed to load mesh from " << filename 
+                  << ": " << importer.GetErrorString() << std::endl;
         return false;
     }
 
+    size_t totalVertices = 0;
+    size_t totalFaces = 0;
+    for (unsigned int m = 0; m < scene->mNumMeshes; m++)
+    {
+        totalVertices += scene->mMeshes[m]->mNumVertices;
+        totalFaces += scene->mMeshes[m]->mNumFaces;
+    }
+
+    this->verticesVec.reserve(totalVertices);
+    this->facesVec.reserve(totalFaces);
+    this->normalsVec.reserve(totalVertices);
+    this->uvsVec.reserve(totalVertices);
+
+    size_t vertexOffset = 0;
+
+    for (unsigned int m = 0; m < scene->mNumMeshes; m++)
+    {
+        aiMesh* mesh = scene->mMeshes[m];
+
+        // Vertices
+        for (unsigned int v = 0; v < mesh->mNumVertices; v++)
+        {
+            aiVector3D pos = mesh->mVertices[v];
+            this->verticesVec.push_back({
+                static_cast<double>(pos.x),
+                static_cast<double>(pos.y),
+                static_cast<double>(pos.z)
+            });
+
+            // Normals
+            if (mesh->HasNormals())
+            {
+                aiVector3D normal = mesh->mNormals[v];
+                this->normalsVec.push_back({
+                    static_cast<double>(normal.x),
+                    static_cast<double>(normal.y),
+                    static_cast<double>(normal.z)
+                });
+            }
+            else
+            {
+                this->normalsVec.push_back({0.0, 1.0, 0.0});
+            }
+
+            // UVs channel 0
+            if (mesh->HasTextureCoords(0))
+            {
+                aiVector3D uv = mesh->mTextureCoords[0][v];
+                this->uvsVec.push_back({
+                    static_cast<double>(uv.x),
+                    static_cast<double>(uv.y)
+                });
+            }
+            else
+            {
+                this->uvsVec.push_back({0.0, 0.0});
+            }
+        }
+
+        // FACES
+        for (unsigned int f = 0; f < mesh->mNumFaces; f++)
+        {
+            aiFace& face = mesh->mFaces[f];
+            if (face.mNumIndices == 3)
+            {
+                this->facesVec.push_back({
+                    static_cast<int>(vertexOffset + face.mIndices[0]),
+                    static_cast<int>(vertexOffset + face.mIndices[1]),
+                    static_cast<int>(vertexOffset + face.mIndices[2])
+                });
+            }
+        }
+
+        vertexOffset += mesh->mNumVertices;
+    }
+
+    std::cout << "[Voxelizer] Successfully loaded mesh from " << filename << " with "
+              << this->verticesVec.size() << " vertices and "
+              << this->facesVec.size() << " faces" << std::endl;
+
+
     // Get extents and min bounds
-    this->meshMinBounds = this->vertices.colwise().minCoeff();
-    this->meshMaxBounds = this->vertices.colwise().maxCoeff();
-    this->meshWidth = this->meshMaxBounds.x() - this->meshMinBounds.x();
-    this->meshHeight = this->meshMaxBounds.y() - this->meshMinBounds.y();
-    this->meshDepth = this->meshMaxBounds.z() - this->meshMinBounds.z();
+    this->meshMinBounds = {
+        std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::max()
+    };
+    this->meshMaxBounds = {
+        std::numeric_limits<double>::lowest(),
+        std::numeric_limits<double>::lowest(),
+        std::numeric_limits<double>::lowest()
+    };
+
+    for (const auto& v : this->verticesVec)
+    {
+        this->meshMinBounds[0] = std::min(this->meshMinBounds[0], v[0]);
+        this->meshMinBounds[1] = std::min(this->meshMinBounds[1], v[1]);
+        this->meshMinBounds[2] = std::min(this->meshMinBounds[2], v[2]);
+        this->meshMaxBounds[0] = std::max(this->meshMaxBounds[0], v[0]);
+        this->meshMaxBounds[1] = std::max(this->meshMaxBounds[1], v[1]);
+        this->meshMaxBounds[2] = std::max(this->meshMaxBounds[2], v[2]);
+    }
+
+    this->meshWidth = this->meshMaxBounds[0] - this->meshMinBounds[0];
+    this->meshHeight = this->meshMaxBounds[1] - this->meshMinBounds[1];
+    this->meshDepth = this->meshMaxBounds[2] - this->meshMinBounds[2];
 
     // READ TEXTURE
     if(this->textureData != nullptr)
@@ -153,20 +195,61 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
         stbi_image_free(this->textureData);
         this->textureData = nullptr;
     }
+    this->hasTexture = false;
 
-    if (!texturePath.empty())
+    // Embedded texture?
+    if (scene->HasTextures() && scene->mNumTextures > 0)
     {
-        this->hasTexture = safeTextureLoad(texturePath, &this->textureData, &this->texWidth, &this->texHeight, &this->texChannels);
-    }
-    else
-    {
-        std::string defaultTexturePath = filename.substr(0, filename.find_last_of('.')) + ".png";
-        bool success = this->hasTexture = safeTextureLoad(defaultTexturePath, &this->textureData, &this->texWidth, &this->texHeight, &this->texChannels);
-
-        if (!success)
+        aiTexture* tex = scene->mTextures[0];
+        if (tex->mHeight == 0) // Compressed texture like PNG or JPG
         {
-            defaultTexturePath = filename.substr(0, filename.find_last_of('.')) + ".jpg";
-            this->hasTexture = safeTextureLoad(defaultTexturePath, &this->textureData, &this->texWidth, &this->texHeight, &this->texChannels);
+            this->textureData = stbi_load_from_memory(
+                reinterpret_cast<unsigned char*>(tex->pcData),
+                tex->mWidth,
+                &this->texWidth, &this->texHeight, &this->texChannels, 0
+            );
+            this->hasTexture = (this->textureData != nullptr);
+            if (this->hasTexture)
+            {
+                std::cout << "[Voxelizer] Loaded embedded texture: " 
+                          << this->texWidth << "x" << this->texHeight << std::endl;
+            }
+        }
+        else // Raw, uncompressed texture data
+        {
+            this->texWidth = tex->mWidth;
+            this->texHeight = tex->mHeight;
+            this->texChannels = 4; // ARGB8888
+            size_t dataSize = tex->mWidth * tex->mHeight * 4;
+            this->textureData = new unsigned char[dataSize];
+            std::memcpy(this->textureData, tex->pcData, dataSize);
+            this->hasTexture = true;
+            std::cout << "[Voxelizer] Loaded raw embedded texture: " 
+                      << this->texWidth << "x" << this->texHeight << std::endl;
+        }
+    }
+
+    if (!this->hasTexture) // Load from file near the model
+    {
+        if (!texturePath.empty())
+        {
+            this->hasTexture = safeTextureLoad(texturePath, &this->textureData, 
+                                                &this->texWidth, &this->texHeight, &this->texChannels);
+        }
+        else
+        {
+            std::string basePath = filename.substr(0, filename.find_last_of('.'));
+            std::vector<std::string> extensions = {".png", ".jpg", ".jpeg", ".tga", ".bmp"};
+            
+            for (const auto& ext : extensions)
+            {
+                if (safeTextureLoad(basePath + ext, &this->textureData, 
+                                    &this->texWidth, &this->texHeight, &this->texChannels))
+                {
+                    this->hasTexture = true;
+                    break;
+                }
+            }
         }
     }
 
@@ -181,7 +264,7 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
         std::cout << "[Voxelizer] Failed to load texture for the mesh." << std::endl;
     }
 
-    return success;
+    return true;
 }
 
 //================================//
@@ -194,38 +277,22 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
     wgpu::Queue queue = this->gpuBundle->GetDevice().GetQueue();
 
     // [1] vertex data
-    vertexData.resize(this->vertices.rows());
-    for(int i = 0; i < this->vertices.rows(); i++)
+    vertexData.resize(this->verticesVec.size());
+    for (size_t i = 0; i < this->verticesVec.size(); i++)
     {
         Vertex v;
 
-        v.position[0] = static_cast<float>(this->vertices(i, 0));
-        v.position[1] = static_cast<float>(this->vertices(i, 1));
-        v.position[2] = static_cast<float>(this->vertices(i, 2));
+        v.position[0] = static_cast<float>(this->verticesVec[i][0]);
+        v.position[1] = static_cast<float>(this->verticesVec[i][1]);
+        v.position[2] = static_cast<float>(this->verticesVec[i][2]);
 
-        if(this->UV.rows() > 0 && i < this->UV.rows())
-        {
-            v.uv[0] = static_cast<float>(this->UV(i, 0));
-            v.uv[1] = static_cast<float>(this->UV(i, 1));
-        }
-        else
-        {
-            v.uv[0] = 0.0f;
-            v.uv[1] = 0.0f;
-        }
+        v.uv[0] = static_cast<float>(this->uvsVec[i][0]);
+        v.uv[1] = static_cast<float>(this->uvsVec[i][1]);
 
-        if(this->Normals.rows() > 0 && i < this->Normals.rows())
-        {
-            v.normal[0] = static_cast<float>(this->Normals(i, 0));
-            v.normal[1] = static_cast<float>(this->Normals(i, 1));
-            v.normal[2] = static_cast<float>(this->Normals(i, 2));
-        }
-        else
-        {
-            v.normal[0] = 0.0f;
-            v.normal[1] = 1.0f;
-            v.normal[2] = 0.0f;
-        }
+        v.normal[0] = static_cast<float>(this->normalsVec[i][0]);
+        v.normal[1] = static_cast<float>(this->normalsVec[i][1]);
+        v.normal[2] = static_cast<float>(this->normalsVec[i][2]);
+
         v.padding = 0.0f;
         vertexData[i] = v;
     }
@@ -238,13 +305,13 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
     queue.WriteBuffer(this->vertexBuffer, 0, vertexData.data(), bufferDesc.size);
 
     // [2] triangle data
-    triangleData.resize(this->faces.rows());
-    for(int i = 0; i < this->faces.rows(); i++)
+    triangleData.resize(this->facesVec.size());
+    for (size_t i = 0; i < this->facesVec.size(); i++)
     {
         Triangle t;
-        t.indices[0] = static_cast<uint32_t>(this->faces(i, 0));
-        t.indices[1] = static_cast<uint32_t>(this->faces(i, 1));
-        t.indices[2] = static_cast<uint32_t>(this->faces(i, 2));
+        t.indices[0] = static_cast<uint32_t>(this->facesVec[i][0]);
+        t.indices[1] = static_cast<uint32_t>(this->facesVec[i][1]);
+        t.indices[2] = static_cast<uint32_t>(this->facesVec[i][2]);
         t._pad = 0;
         triangleData[i] = t;
     }
@@ -484,7 +551,7 @@ void Voxelizer::checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPas
 //================================//
 bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelResolution, uint32_t maxBricksPerPass, uint8_t numPasses)
 {
-    if (this->vertices.rows() == 0 || this->faces.rows() == 0) 
+    if (this->verticesVec.empty() || this->facesVec.empty()) 
     {
         std::cerr << "[Voxelizer] No mesh loaded" << std::endl;
         return false;
@@ -510,11 +577,11 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
     uniforms.voxelResolution = voxelResolution;
     uniforms.brickResolution = voxelResolution / 8;
     uniforms.voxelSize = voxelSize;
-    uniforms.numTriangles = static_cast<uint32_t>(this->faces.rows());
-    uniforms.meshMinBounds[0] = static_cast<float>(this->meshMinBounds.x());
-    uniforms.meshMinBounds[1] = static_cast<float>(this->meshMinBounds.y());
-    uniforms.meshMinBounds[2] = static_cast<float>(this->meshMinBounds.z());   
-    uniforms._pad1 = 0;     
+    uniforms.numTriangles = static_cast<uint32_t>(this->facesVec.size());
+    uniforms.meshMinBounds[0] = static_cast<float>(this->meshMinBounds[0]);
+    uniforms.meshMinBounds[1] = static_cast<float>(this->meshMinBounds[1]);
+    uniforms.meshMinBounds[2] = static_cast<float>(this->meshMinBounds[2]);
+    uniforms._pad1 = 0;
     uniforms._pad2[0] = 0;
     uniforms._pad2[1] = 0;
 
@@ -556,8 +623,8 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
         {
             wgpu::BindGroupEntry entries[7]{};
             entries[0].binding = 0; entries[0].buffer = uniformBuffer; entries[0].size = sizeof(VoxelizerUniforms);
-            entries[1].binding = 1; entries[1].buffer = this->vertexBuffer; entries[1].size = sizeof(Vertex) * vertices.rows();
-            entries[2].binding = 2; entries[2].buffer = this->triangleBuffer; entries[2].size = sizeof(Triangle) * faces.rows();
+            entries[1].binding = 1; entries[1].buffer = this->vertexBuffer; entries[1].size = sizeof(Vertex) * verticesVec.size();
+            entries[2].binding = 2; entries[2].buffer = this->triangleBuffer; entries[2].size = sizeof(Triangle) * facesVec.size();
             entries[3].binding = 3; entries[3].textureView = this->textureView;
             entries[4].binding = 4; entries[4].sampler = this->textureSampler;
             entries[5].binding = 5; entries[5].buffer = this->occupancyBuffer; entries[5].size = sizeof(uint32_t) * 16 * bricksThisPass;

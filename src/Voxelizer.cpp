@@ -70,7 +70,7 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     
     const aiScene* scene = importer.ReadFile(filename,
         aiProcess_Triangulate |
-        // aiProcess_FlipUVs |
+        aiProcess_FlipUVs |
         aiProcess_GenNormals |
         // aiProcess_JoinIdenticalVertices|
         aiProcess_PreTransformVertices
@@ -163,6 +163,20 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
               << this->verticesVec.size() << " vertices and "
               << this->facesVec.size() << " faces" << std::endl;
 
+    // Print total number of different UV channels detected
+    for (int i = 0; i < 10; i++)
+    {
+        for (unsigned int m = 0; m < scene->mNumMeshes; m++)
+        {
+            aiMesh* mesh = scene->mMeshes[m];
+            if (mesh->HasTextureCoords(i))
+            {
+                std::cout << "[Voxelizer] Detected UV channel " << i << " in mesh " << m << std::endl;
+            }
+        }
+    }
+    assert(this->verticesVec.size() == this->uvsVec.size());
+    std::cout << scene->mNumTextures << " embedded textures found in the model." << std::endl;
 
     // Get extents and min bounds
     this->meshMinBounds = {
@@ -516,7 +530,7 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
 void Voxelizer::checkLimits(uint32_t& voxelResolution, uint32_t& maxBricksPerPass, uint8_t& numPasses)
 {
     const uint64_t colorBytesPerBrick = sizeof(uint32_t) * 8 * 8 * 8;
-    uint64_t maxBufferSize = this->gpuBundle->GetLimits().maxBufferSize;
+    uint64_t maxBufferSize = this->gpuBundle->GetLimits().maxBufferSize * 0.6;
     uint64_t maxColorBufferSize = (maxBufferSize / static_cast<uint64_t>(colorBytesPerBrick)) * static_cast<uint64_t>(colorBytesPerBrick);
 
     if(voxelResolution <= 0) voxelResolution = 8;

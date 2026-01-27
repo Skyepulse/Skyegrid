@@ -5,6 +5,7 @@
 #include "Rendering/Pipelines/pipelines.hpp"
 #include <algorithm>
 #include <vector>
+#include <array>
 #include <fstream>
 #include <string>
 #include <bit>

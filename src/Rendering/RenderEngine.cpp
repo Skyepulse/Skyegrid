@@ -32,6 +32,8 @@ void RenderEngine::InitImGui()
     this->previousVisibleBricksValue = this->visibleBricksSliderValue;
     this->resolutionDigitBoxValue = this->resolutionSliderValue;
     this->visibleBricksDigitBoxValue = this->visibleBricksSliderValue;
+    this->flipBits ^= (1 << 1);
+    this->flipBits ^= (1 << 2);
 
     ImGui_ImplWGPU_Init(&init_info);
     std::cout << "[RenderEngine] ImGui initialized successfully.\n";
@@ -70,8 +72,18 @@ void RenderEngine::RenderImGui(wgpu::RenderPassEncoder& pass)
         onVisibleBricksValueChanged(visibleBricksSliderValue);
 
     ImGui::Separator();
+    ImGui::Text("Flip Axes:");
+    if (ImGui::Checkbox("Flip X Axis", reinterpret_cast<bool*>(&flipXCheckbox)))
+        this->flipAxis(0);
+    if (ImGui::Checkbox("Flip Y Axis", reinterpret_cast<bool*>(&flipYCheckbox)))
+        this->flipAxis(1);
+    if (ImGui::Checkbox("Flip Z Axis", reinterpret_cast<bool*>(&flipZCheckbox)))
+        this->flipAxis(2);
+    ImGui::Separator();
+
     ImGui::Text("CPU Frame Time: %.3f ms", this->cpuFrameTimeMS);
     ImGui::Separator();
+
     ImGui::Text("GPU Ray Trace Time: %.3f ms", this->gpuFrameTimeRayTraceMs);
     ImGui::Text("GPU Upload Time: %.3f ms", this->gpuFrameTimeUploadMs);
     ImGui::Text("GPU Blit Time: %.3f ms", this->gpuFrameTimeBlitMs);
@@ -116,6 +128,15 @@ void RenderEngine::onVisibleBricksValueChanged(int newMaxVisibleBricks)
     this->voxelManager->createUploadBindGroup(this->computeUploadVoxelPipeline, *this->wgpuBundle);
 
     this->previousVisibleBricksValue = newMaxVisibleBricks;
+}
+
+//================================//
+void RenderEngine::flipAxis(int axis)
+{
+    if (axis < 0 || axis > 2)
+        return;
+
+    this->flipBits ^= (1 << axis);
 }
 
 //================================//
@@ -318,6 +339,7 @@ void RenderEngine::Render(void* userData)
         voxelParams.voxelResolution = static_cast<uint32_t>(this->voxelManager->GetVoxelResolution());
         voxelParams.time = static_cast<float>(renderInfo.time);
         voxelParams.hasColor = this->voxelManager->GetHasColor() ? 1 : 0;
+        voxelParams.flip = this->flipBits;
 
         queue.WriteBuffer(
             this->computeVoxelPipeline.associatedUniforms[0],

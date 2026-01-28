@@ -14,6 +14,8 @@
 class VoxelFileWriter;
 class VoxelFileReader;
 
+const uint32_t MAX_TEXTURES = 4;
+
 //================================//
 struct VoxelizerUniforms
 {
@@ -44,6 +46,16 @@ struct Triangle
     uint32_t _pad;
 };
 
+struct TextureInfo
+{
+    bool hasTexture;
+    int width;
+    int height;
+    int channels;
+    unsigned char* data;
+    std::string name;
+};
+
 //================================//
 class Voxelizer
 {
@@ -65,11 +77,9 @@ private:
     std::vector<std::array<int, 3>> facesVec;
     std::vector<std::array<double, 3>> normalsVec;
     std::vector<std::array<double, 2>> uvsVec;
+    std::vector<int> textureIndicesVec;
 
-
-    bool hasTexture = false;
-    unsigned char* textureData = nullptr;
-    int texWidth, texHeight, texChannels;
+    std::vector<TextureInfo> texturesInfo;
 
     double meshWidth; // x axis extent
     double meshHeight; // y axis extent
@@ -82,9 +92,9 @@ private:
     wgpu::Buffer triangleBuffer;
     wgpu::Buffer occupancyBuffer;
     wgpu::Buffer denseColorsBuffer;
-    wgpu::Texture texture;
-    wgpu::TextureView textureView;
-    wgpu::Sampler textureSampler;
+    std::vector<wgpu::Texture> textures;
+    std::vector<wgpu::TextureView> textureViews;
+    std::vector<wgpu::Sampler> textureSamplers;
 
     wgpu::Buffer brickOutputBuffer;
     wgpu::Buffer packedColorBuffer;

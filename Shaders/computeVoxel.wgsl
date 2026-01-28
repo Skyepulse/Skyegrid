@@ -12,7 +12,7 @@ struct ComputeVoxelParams
     voxelResolution: u32,
     time: f32,
     hasColor: u32,
-    _pad: u32,
+    flipBits: u32,
 };
 
 //================================//
@@ -67,6 +67,24 @@ var<storage, read_write> brickRequestFlags: array<atomic<u32>>;
 // [29]     : unloaded flag (has LOD color)
 // [28:24]  : unused
 // [23:0]   : brick pool index OR packed LOD color
+fn flippedAxis(axisIndex: u32) -> bool
+{
+    if (axisIndex == 0u)
+    {
+        return (params.flipBits & 0x1u) != 0u;
+    }
+    else if (axisIndex == 1u)
+    {
+        return (params.flipBits & 0x2u) != 0u;
+    }
+    else if (axisIndex == 2u)
+    {
+        return (params.flipBits & 0x4u) != 0u;
+    }
+    return false;
+}
+
+//================================//
 fn isBrickLoaded(pointer: u32) -> bool
 {
     return (pointer & 0x80000000u) != 0u; // Check resident flag at 31st bit
@@ -81,8 +99,25 @@ fn isBrickUnloaded(pointer: u32) -> bool
 //================================//
 fn isVoxelSet(brick: Brick, x: u32, y: u32, z: u32) -> bool
 {
-    let bit = x + y * 8u;           // 0..63
-    let word = z * 2u + (bit >> 5u); // Which slice
+    var xV = x;
+    var yV = y;
+    var zV = z;
+
+    if (flippedAxis(0u))
+    {
+        xV = 7u - xV;
+    }
+    if (flippedAxis(1u))
+    {
+        yV = 7u - yV;
+    }
+    if (flippedAxis(2u))
+    {
+        zV = 7u - zV;
+    }
+
+    let bit = xV + yV * 8u;           // 0..63
+    let word = zV * 2u + (bit >> 5u); // Which slice
     let mask = 1u << (bit & 31u);
     return (brick.occupancy[word] & mask) != 0u;
 }
@@ -151,13 +186,42 @@ fn writeFeedback(brickIndex: u32)
 fn brickToIndex(brickCoord: vec3<u32>) -> u32
 {
     let gridResolution: u32 = params.voxelResolution / 8u;
-    return brickCoord.x + brickCoord.y * gridResolution + brickCoord.z * gridResolution * gridResolution;
+    var brickCoordV = brickCoord;
+
+    if (flippedAxis(0u))
+    {
+        brickCoordV.x = gridResolution - 1u - brickCoordV.x;
+    }
+    if (flippedAxis(1u))
+    {
+        brickCoordV.y = gridResolution - 1u - brickCoordV.y;
+    }
+    if (flippedAxis(2u))
+    {
+        brickCoordV.z = gridResolution - 1u - brickCoordV.z;
+    }
+
+    return brickCoordV.x + brickCoordV.y * gridResolution + brickCoordV.z * gridResolution * gridResolution;
 }
 
 //================================//
 fn localCoordToVoxelIndex(localCoord: vec3<u32>) -> u32
 {
-    return localCoord.x + localCoord.y * 8u + localCoord.z * 64u;
+    var localCoordV = localCoord;
+    if (flippedAxis(0u))
+    {
+        localCoordV.x = 7u - localCoordV.x;
+    }
+    if (flippedAxis(1u))
+    {
+        localCoordV.y = 7u - localCoordV.y;
+    }
+    if (flippedAxis(2u))
+    {
+        localCoordV.z = 7u - localCoordV.z;
+    }
+
+    return localCoordV.x + localCoordV.y * 8u + localCoordV.z * 64u;
 }
 
 //================================//

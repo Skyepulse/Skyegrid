@@ -34,8 +34,9 @@ struct VoxelParameters
     uint32_t voxelResolution;
     float time;
     uint32_t hasColor;
-    uint32_t _pad;
+    uint32_t flip; // bits 0: flipX, 1: flipY, 2: flipZ
 };
+
 struct TimingCtx 
 {
     RenderEngine* engine;
@@ -108,6 +109,8 @@ private:
     void onResolutionValueChanged(int newResolution);
     void onVisibleBricksValueChanged(int newMaxVisibleBricks);
 
+    void flipAxis(int axis); // 0, 1, 2
+
     void ReadFeedbacks();
 
     void RebuildVoxelPipelineResources(const RenderInfo& renderInfo);
@@ -124,6 +127,8 @@ private:
     std::vector<uint32_t> texelInfo;
     std::unique_ptr<VoxelManager> voxelManager;
 
+    uint32_t flipBits = 0;
+
     // ImGUI
     int resolutionSliderValue = -1;
     int previousResolutionValue = -1;
@@ -131,6 +136,9 @@ private:
     int previousVisibleBricksValue = -1;
     int resolutionDigitBoxValue = -1;
     int visibleBricksDigitBoxValue = -1;
+    int flipXCheckbox = 0;
+    int flipYCheckbox = 0;
+    int flipZCheckbox = 0;
 
     // Timing info
     float cpuFrameTimeMS = 0.0f;

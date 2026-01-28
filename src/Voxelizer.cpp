@@ -25,7 +25,6 @@ struct BrickOutput {
 Voxelizer::Voxelizer()
 {
     this->gpuBundle = std::make_unique<WgpuBundle>(WindowFormat{nullptr, 1, 1, false});
-    this->textureData = nullptr;
 
     CreateVoxelizationPipeline(*this->gpuBundle, this->voxelizationPipeline);
     CreateCompactVoxelPipeline(*this->gpuBundle, this->compactVoxelPipeline);
@@ -34,9 +33,13 @@ Voxelizer::Voxelizer()
 //================================//
 Voxelizer::~Voxelizer()
 {
-    if (textureData) 
+    int numTextures = static_cast<int>(this->texturesInfo.size());
+    for (int i = 0; i < numTextures; i++)
     {
-        stbi_image_free(textureData);
+        if (this->texturesInfo[i].data) 
+        {
+            stbi_image_free(this->texturesInfo[i].data);
+        }
     }
 }
 
@@ -65,6 +68,9 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     this->facesVec.clear();
     this->normalsVec.clear();
     this->uvsVec.clear();
+    this->texturesInfo.clear();
+    this->textureIndicesVec.clear();
+
 
     Assimp::Importer importer;
     
@@ -83,6 +89,9 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
         return false;
     }
 
+    unsigned int numEmbeddedTextures = scene->mNumTextures;
+    std::cout << numEmbeddedTextures << " embedded textures found in the model." << std::endl;
+
     size_t totalVertices = 0;
     size_t totalFaces = 0;
     for (unsigned int m = 0; m < scene->mNumMeshes; m++)
@@ -95,7 +104,7 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     this->facesVec.reserve(totalFaces);
     this->normalsVec.reserve(totalVertices);
     this->uvsVec.reserve(totalVertices);
-
+    this->textureIndicesVec.reserve(totalVertices);
     size_t vertexOffset = 0;
 
     for (unsigned int m = 0; m < scene->mNumMeshes; m++)
@@ -140,6 +149,16 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
             {
                 this->uvsVec.push_back({0.0, 0.0});
             }
+
+            // Which texture is it going to use
+            if (numEmbeddedTextures > 0)
+            {
+                this->textureIndicesVec.push_back(mesh->mMaterialIndex);
+            }
+            else
+            {
+                this->textureIndicesVec.push_back(0); // First texture
+            }
         }
 
         // FACES
@@ -163,20 +182,6 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
               << this->verticesVec.size() << " vertices and "
               << this->facesVec.size() << " faces" << std::endl;
 
-    // Print total number of different UV channels detected
-    for (int i = 0; i < 10; i++)
-    {
-        for (unsigned int m = 0; m < scene->mNumMeshes; m++)
-        {
-            aiMesh* mesh = scene->mMeshes[m];
-            if (mesh->HasTextureCoords(i))
-            {
-                std::cout << "[Voxelizer] Detected UV channel " << i << " in mesh " << m << std::endl;
-            }
-        }
-    }
-    assert(this->verticesVec.size() == this->uvsVec.size());
-    std::cout << scene->mNumTextures << " embedded textures found in the model." << std::endl;
 
     // Get extents and min bounds
     this->meshMinBounds = {
@@ -204,52 +209,52 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     this->meshHeight = this->meshMaxBounds[1] - this->meshMinBounds[1];
     this->meshDepth = this->meshMaxBounds[2] - this->meshMinBounds[2];
 
-    // READ TEXTURE
-    if(this->textureData != nullptr)
-    {
-        stbi_image_free(this->textureData);
-        this->textureData = nullptr;
-    }
-    this->hasTexture = false;
-
     // Embedded texture?
     if (scene->HasTextures() && scene->mNumTextures > 0)
     {
-        aiTexture* tex = scene->mTextures[0];
-        if (tex->mHeight == 0) // Compressed texture like PNG or JPG
+        for (int i = 0; i < scene->mNumTextures; i++)
         {
-            this->textureData = stbi_load_from_memory(
-                reinterpret_cast<unsigned char*>(tex->pcData),
-                tex->mWidth,
-                &this->texWidth, &this->texHeight, &this->texChannels, 0
-            );
-            this->hasTexture = (this->textureData != nullptr);
-            if (this->hasTexture)
+            this->texturesInfo.push_back({false, 0, 0, 0, nullptr, ""});
+            aiTexture* tex = scene->mTextures[i];
+
+            if (tex->mHeight == 0) // Compressed texture like PNG or JPG
             {
-                std::cout << "[Voxelizer] Loaded embedded texture: " 
-                          << this->texWidth << "x" << this->texHeight << std::endl;
+                this->texturesInfo[i].data = stbi_load_from_memory(
+                    reinterpret_cast<unsigned char*>(tex->pcData),
+                    tex->mWidth,
+                    &this->texturesInfo[i].width, &this->texturesInfo[i].height, &this->texturesInfo[i].channels, 0
+                );
+                this->texturesInfo[i].hasTexture = (this->texturesInfo[i].data != nullptr);
+                if (this->texturesInfo[i].hasTexture)
+                {
+                    this->texturesInfo[i].name = tex->mFilename.C_Str();
+                    std::cout << "[Voxelizer] Loaded embedded texture: " 
+                            << this->texturesInfo[i].width << "x" << this->texturesInfo[i].height << " with name: " << this->texturesInfo[i].name << std::endl;
+                }
             }
-        }
-        else // Raw, uncompressed texture data
-        {
-            this->texWidth = tex->mWidth;
-            this->texHeight = tex->mHeight;
-            this->texChannels = 4; // ARGB8888
-            size_t dataSize = tex->mWidth * tex->mHeight * 4;
-            this->textureData = new unsigned char[dataSize];
-            std::memcpy(this->textureData, tex->pcData, dataSize);
-            this->hasTexture = true;
-            std::cout << "[Voxelizer] Loaded raw embedded texture: " 
-                      << this->texWidth << "x" << this->texHeight << std::endl;
+            else // Raw, uncompressed texture data
+            {
+                this->texturesInfo[i].width = tex->mWidth;
+                this->texturesInfo[i].height = tex->mHeight;
+                this->texturesInfo[i].channels = 4; // ARGB8888
+                size_t dataSize = tex->mWidth * tex->mHeight * 4;
+                this->texturesInfo[i].data = new unsigned char[dataSize];
+                std::memcpy(this->texturesInfo[i].data, tex->pcData, dataSize);
+                this->texturesInfo[i].hasTexture = true;
+                this->texturesInfo[i].name = tex->mFilename.C_Str();
+                std::cout << "[Voxelizer] Loaded RAW embedded texture: " 
+                        << this->texturesInfo[i].width << "x" << this->texturesInfo[i].height << " with name: " << this->texturesInfo[i].name << std::endl;
+            }
         }
     }
 
-    if (!this->hasTexture) // Load from file near the model
+    if (numEmbeddedTextures == 0) // Load from file near the model
     {
+        this->texturesInfo.push_back({false, 0, 0, 0, nullptr, ""});
         if (!texturePath.empty())
         {
-            this->hasTexture = safeTextureLoad(texturePath, &this->textureData, 
-                                                &this->texWidth, &this->texHeight, &this->texChannels);
+            this->texturesInfo.back().hasTexture = safeTextureLoad(texturePath, &this->texturesInfo.back().data, 
+                                                &this->texturesInfo.back().width, &this->texturesInfo.back().height, &this->texturesInfo.back().channels);
         }
         else
         {
@@ -258,27 +263,29 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
             
             for (const auto& ext : extensions)
             {
-                if (safeTextureLoad(basePath + ext, &this->textureData, 
-                                    &this->texWidth, &this->texHeight, &this->texChannels))
+                if (safeTextureLoad(basePath + ext, &this->texturesInfo.back().data, 
+                                    &this->texturesInfo.back().width, &this->texturesInfo.back().height, &this->texturesInfo.back().channels))
                 {
-                    this->hasTexture = true;
+                    this->texturesInfo.back().hasTexture = true;
+                    this->texturesInfo.back().name = basePath + ext;
                     break;
                 }
             }
         }
+
+        if (this->texturesInfo.back().hasTexture)
+        {
+            std::cout << "[Voxelizer] Successfully loaded texture with size "
+                        << this->texturesInfo.back().width << "x" << this->texturesInfo.back().height << " and "
+                        << this->texturesInfo.back().channels << " channels." << std::endl;
+        }
+        else
+        {
+            std::cout << "[Voxelizer] Failed to load texture for the mesh." << std::endl;
+        }
     }
 
-    if (this->hasTexture)
-    {
-        std::cout << "[Voxelizer] Successfully loaded texture with size "
-                    << this->texWidth << "x" << this->texHeight << " and "
-                    << this->texChannels << " channels." << std::endl;
-    }
-    else
-    {
-        std::cout << "[Voxelizer] Failed to load texture for the mesh." << std::endl;
-    }
-
+    std::cout << "[Voxelizer] Total textures loaded: " << this->texturesInfo.size() << std::endl;
     return true;
 }
 
@@ -401,98 +408,119 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
     this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->packedColorReadbackBuffer);
 
     // [8] texture, texture view, sampler
-    if (this->hasTexture && this->textureData)
+    this->textures.clear();
+    this->textureViews.clear();
+    this->textureSamplers.clear();
+    
+    unsigned int numTextures = std::min(static_cast<unsigned int>(this->texturesInfo.size()), MAX_TEXTURES);
+ 
+    if (numTextures != 0)
     {
-        wgpu::TextureDescriptor textureDesc{};
-        textureDesc.size = {static_cast<uint32_t>(this->texWidth), static_cast<uint32_t>(this->texHeight), 1};
-        textureDesc.mipLevelCount = 1;
-        textureDesc.sampleCount = 1;
-        textureDesc.dimension = wgpu::TextureDimension::e2D;
-        textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-        textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-        textureDesc.label = "Mesh Texture";
+        this->textures.resize(numTextures);
+        this->textureViews.resize(numTextures);
+        this->textureSamplers.resize(numTextures);
 
-        this->texture = this->gpuBundle->GetDevice().CreateTexture(&textureDesc);
-        std::vector<uint8_t> rgbaData;
-        if (texChannels == 3) // Convert to RGBA, NEEDED IN COMPUTE SHADER
+        for (int i = 0; i < numTextures; i++)
         {
-            rgbaData.resize(this->texWidth * this->texHeight * 4);
-            for(int i = 0; i < this->texWidth * this->texHeight; i++)
+            TextureInfo& texInfo = this->texturesInfo[i];
+            if (!texInfo.hasTexture)
+                continue;
+
+            wgpu::TextureDescriptor textureDesc{};
+            textureDesc.size = {static_cast<uint32_t>(texInfo.width), static_cast<uint32_t>(texInfo.height), 1};
+            textureDesc.mipLevelCount = 1;
+            textureDesc.sampleCount = 1;
+            textureDesc.dimension = wgpu::TextureDimension::e2D;
+            textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+            textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+            textureDesc.label = "Mesh Texture";
+
+            this->textures[i] = this->gpuBundle->GetDevice().CreateTexture(&textureDesc);
+            std::vector<uint8_t> rgbaData;
+            if (texInfo.channels == 3) // Convert to RGBA, NEEDED IN COMPUTE SHADER
             {
-                rgbaData[i * 4 + 0] = this->textureData[i * 3 + 0];
-                rgbaData[i * 4 + 1] = this->textureData[i * 3 + 1];
-                rgbaData[i * 4 + 2] = this->textureData[i * 3 + 2];
-                rgbaData[i * 4 + 3] = 255;
+                rgbaData.resize(texInfo.width * texInfo.height * 4);
+                for(int i = 0; i < texInfo.width * texInfo.height; i++)
+                {
+                    rgbaData[i * 4 + 0] = texInfo.data[i * 3 + 0];
+                    rgbaData[i * 4 + 1] = texInfo.data[i * 3 + 1];
+                    rgbaData[i * 4 + 2] = texInfo.data[i * 3 + 2];
+                    rgbaData[i * 4 + 3] = 255;
+                }
             }
-        }
-        else if (texChannels == 4)
-        {
-            rgbaData.assign(this->textureData, this->textureData + (this->texWidth * this->texHeight * this->texChannels));
-        }
-        else if (texChannels == 1)
-        {
-            rgbaData.resize(this->texWidth * this->texHeight * 4);
-            for(int i = 0; i < this->texWidth * this->texHeight; i++)
+            else if (texInfo.channels == 4)
             {
-                uint8_t value = this->textureData[i];
-                rgbaData[i * 4 + 0] = value;
-                rgbaData[i * 4 + 1] = value;
-                rgbaData[i * 4 + 2] = value;
-                rgbaData[i * 4 + 3] = 255;
+                rgbaData.assign(texInfo.data, texInfo.data + (texInfo.width * texInfo.height * texInfo.channels));
             }
+            else if (texInfo.channels == 1)
+            {
+                rgbaData.resize(texInfo.width * texInfo.height * 4);
+                for(int i = 0; i < texInfo.width * texInfo.height; i++)
+                {
+                    uint8_t value = texInfo.data[i];
+                    rgbaData[i * 4 + 0] = value;
+                    rgbaData[i * 4 + 1] = value;
+                    rgbaData[i * 4 + 2] = value;
+                    rgbaData[i * 4 + 3] = 255;
+                }
+            }
+            else
+            {
+                rgbaData.resize(texInfo.width * texInfo.height * 4, 255); // default white
+            }
+
+            wgpu::TexelCopyTextureInfo dstTexture{};
+            dstTexture.texture = this->textures[i];
+            dstTexture.mipLevel = 0;
+            dstTexture.origin = {0, 0, 0};
+            dstTexture.aspect = wgpu::TextureAspect::All;
+
+            wgpu::TexelCopyBufferLayout srcBufferLayout{};
+            srcBufferLayout.offset = 0;
+            srcBufferLayout.bytesPerRow = texInfo.width * 4;
+            srcBufferLayout.rowsPerImage = texInfo.height;
+
+            wgpu::Extent3D writeSize{
+                static_cast<uint32_t>(texInfo.width),
+                static_cast<uint32_t>(texInfo.height),
+                1
+            };
+
+            queue.WriteTexture(&dstTexture, rgbaData.data(), rgbaData.size(), &srcBufferLayout, &writeSize);
+
+            wgpu::TextureViewDescriptor viewDesc{};
+            viewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+            viewDesc.dimension = wgpu::TextureViewDimension::e2D;
+            viewDesc.baseMipLevel = 0;
+            viewDesc.mipLevelCount = 1;
+            viewDesc.baseArrayLayer = 0;
+            viewDesc.arrayLayerCount = 1;
+            viewDesc.aspect = wgpu::TextureAspect::All;
+            viewDesc.label = "Mesh Texture View";
+            this->textureViews[i] = this->textures[i].CreateView(&viewDesc);
+
+            wgpu::SamplerDescriptor samplerDesc{};
+            samplerDesc.addressModeU = wgpu::AddressMode::Repeat;
+            samplerDesc.addressModeV = wgpu::AddressMode::Repeat;
+            samplerDesc.addressModeW = wgpu::AddressMode::Repeat;
+            samplerDesc.magFilter = wgpu::FilterMode::Linear;
+            samplerDesc.minFilter = wgpu::FilterMode::Linear;
+            samplerDesc.mipmapFilter = wgpu::MipmapFilterMode::Nearest;
+            samplerDesc.lodMaxClamp = 1.0f;
+            samplerDesc.lodMinClamp = 0.0f;
+            samplerDesc.compare = wgpu::CompareFunction::Undefined;
+            samplerDesc.maxAnisotropy = 1;
+            samplerDesc.label = "Mesh Texture Sampler";
+
+            this->textureSamplers[i] = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
         }
-        else
-        {
-            rgbaData.resize(texWidth * texHeight * 4, 255); // default white
-        }
-
-        wgpu::TexelCopyTextureInfo dstTexture{};
-        dstTexture.texture = this->texture;
-        dstTexture.mipLevel = 0;
-        dstTexture.origin = {0, 0, 0};
-        dstTexture.aspect = wgpu::TextureAspect::All;
-
-        wgpu::TexelCopyBufferLayout srcBufferLayout{};
-        srcBufferLayout.offset = 0;
-        srcBufferLayout.bytesPerRow = this->texWidth * 4;
-        srcBufferLayout.rowsPerImage = this->texHeight;
-
-        wgpu::Extent3D writeSize{
-            static_cast<uint32_t>(texWidth),
-            static_cast<uint32_t>(texHeight),
-            1
-        };
-
-        queue.WriteTexture(&dstTexture, rgbaData.data(), rgbaData.size(), &srcBufferLayout, &writeSize);
-
-        wgpu::TextureViewDescriptor viewDesc{};
-        viewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-        viewDesc.dimension = wgpu::TextureViewDimension::e2D;
-        viewDesc.baseMipLevel = 0;
-        viewDesc.mipLevelCount = 1;
-        viewDesc.baseArrayLayer = 0;
-        viewDesc.arrayLayerCount = 1;
-        viewDesc.aspect = wgpu::TextureAspect::All;
-        viewDesc.label = "Mesh Texture View";
-        this->textureView = this->texture.CreateView(&viewDesc);
-
-        wgpu::SamplerDescriptor samplerDesc{};
-        samplerDesc.addressModeU = wgpu::AddressMode::Repeat;
-        samplerDesc.addressModeV = wgpu::AddressMode::Repeat;
-        samplerDesc.addressModeW = wgpu::AddressMode::Repeat;
-        samplerDesc.magFilter = wgpu::FilterMode::Linear;
-        samplerDesc.minFilter = wgpu::FilterMode::Linear;
-        samplerDesc.mipmapFilter = wgpu::MipmapFilterMode::Nearest;
-        samplerDesc.lodMaxClamp = 1.0f;
-        samplerDesc.lodMinClamp = 0.0f;
-        samplerDesc.compare = wgpu::CompareFunction::Undefined;
-        samplerDesc.maxAnisotropy = 1;
-        samplerDesc.label = "Mesh Texture Sampler";
-
-        this->textureSampler = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
     }
     else // ALL WHITE TEXTURE BY DEFAULT
     {
+        this->textures.resize(1);
+        this->textureViews.resize(1);
+        this->textureSamplers.resize(1);
+        
         wgpu::TextureDescriptor textureDesc{};
         textureDesc.size = {1, 1, 1};
         textureDesc.mipLevelCount = 1;
@@ -500,12 +528,12 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
         textureDesc.dimension = wgpu::TextureDimension::e2D;
         textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
         textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-        this->texture = this->gpuBundle->GetDevice().CreateTexture(&textureDesc);
+        this->textures[0] = this->gpuBundle->GetDevice().CreateTexture(&textureDesc);
 
         uint8_t whitePixel[4] = {255, 255, 255, 255};
 
         wgpu::TexelCopyTextureInfo dstTexture{};
-        dstTexture.texture = this->texture;
+        dstTexture.texture = this->textures[0];
         dstTexture.mipLevel = 0;
         dstTexture.origin = {0, 0, 0};
 
@@ -517,12 +545,12 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
         wgpu::Extent3D writeSize{1,1,1};
 
         queue.WriteTexture(&dstTexture, whitePixel, sizeof(whitePixel), &srcBufferLayout, &writeSize);
-        this->textureView = this->texture.CreateView();
+        this->textureViews[0] = this->textures[0].CreateView();
 
         wgpu::SamplerDescriptor samplerDesc{};
         samplerDesc.magFilter = wgpu::FilterMode::Nearest;
         samplerDesc.minFilter = wgpu::FilterMode::Nearest;
-        this->textureSampler = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
+        this->textureSamplers[0] = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
     }
 }
 
@@ -640,8 +668,8 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             entries[0].binding = 0; entries[0].buffer = uniformBuffer; entries[0].size = sizeof(VoxelizerUniforms);
             entries[1].binding = 1; entries[1].buffer = this->vertexBuffer; entries[1].size = sizeof(Vertex) * verticesVec.size();
             entries[2].binding = 2; entries[2].buffer = this->triangleBuffer; entries[2].size = sizeof(Triangle) * facesVec.size();
-            entries[3].binding = 3; entries[3].textureView = this->textureView;
-            entries[4].binding = 4; entries[4].sampler = this->textureSampler;
+            entries[3].binding = 3; entries[3].textureView = this->textureViews[0];
+            entries[4].binding = 4; entries[4].sampler = this-> textureSamplers[0];
             entries[5].binding = 5; entries[5].buffer = this->occupancyBuffer; entries[5].size = sizeof(uint32_t) * 16 * bricksThisPass;
             entries[6].binding = 6; entries[6].buffer = this->denseColorsBuffer; entries[6].size = sizeof(uint32_t) * bricksThisPass * 512;
 

@@ -166,7 +166,7 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
 
     // Compute pipeline bind group
     // Bind Group
-    this->computeVoxelPipeline.bindGroup = nullptr;
+    this->computeVoxelPipeline.bindGroups[0] = nullptr; // will be recreated below with new texture
     std::vector<wgpu::BindGroupEntry> entries(10);
 
     entries[0].binding = 0;
@@ -216,23 +216,22 @@ void RenderEngine::RebuildVoxelPipelineResources(const RenderInfo& renderInfo)
     entries[9].size = this->voxelManager->brickRequestFlagsBuffer.GetSize();
 
     wgpu::BindGroupDescriptor bindGroupDesc{};
-    bindGroupDesc.layout = this->computeVoxelPipeline.bindGroupLayout;
+    bindGroupDesc.layout = this->computeVoxelPipeline.bindGroupLayouts[0];
     bindGroupDesc.entryCount = static_cast<uint32_t>(entries.size());
     bindGroupDesc.entries = entries.data();
-    this->computeVoxelPipeline.bindGroup = this->wgpuBundle->GetDevice().CreateBindGroup(&bindGroupDesc);
+    this->computeVoxelPipeline.bindGroups[0] = this->wgpuBundle->GetDevice().CreateBindGroup(&bindGroupDesc);
 
     // Blit pipeline bind group
-    this->blitVoxelPipeline.bindGroup = nullptr; 
     wgpu::BindGroupEntry blitEntries[2]{};
     blitEntries[0].binding = 0;
     blitEntries[0].textureView = this->computeVoxelPipeline.associatedTextureViews[0];
     blitEntries[1].binding = 1;
     blitEntries[1].sampler = this->blitVoxelPipeline.associatedSamplers[0];
     wgpu::BindGroupDescriptor blitBindGroupDesc{};
-    blitBindGroupDesc.layout = this->blitVoxelPipeline.bindGroupLayout;
+    blitBindGroupDesc.layout = this->blitVoxelPipeline.bindGroupLayouts[0];
     blitBindGroupDesc.entryCount = 2;
     blitBindGroupDesc.entries = blitEntries;
-    this->blitVoxelPipeline.bindGroup = this->wgpuBundle->GetDevice().CreateBindGroup(&blitBindGroupDesc);
+    this->blitVoxelPipeline.bindGroups[0] = this->wgpuBundle->GetDevice().CreateBindGroup(&blitBindGroupDesc);
 }
 
 //================================//
@@ -316,7 +315,7 @@ void RenderEngine::Render(void* userData)
 
         this->computeUploadVoxelPipeline.AssertInitialized();
         pass.SetPipeline(this->computeUploadVoxelPipeline.computePipeline);
-        pass.SetBindGroup(0, this->computeUploadVoxelPipeline.bindGroup);
+        pass.SetBindGroup(0, this->computeUploadVoxelPipeline.bindGroups[0]);
 
         // Dispatch size based on upload buffer size, filled by CPU
         if (uploadCount > 0)
@@ -359,7 +358,7 @@ void RenderEngine::Render(void* userData)
 
         this->computeVoxelPipeline.AssertInitialized();
         pass.SetPipeline(this->computeVoxelPipeline.computePipeline);
-        pass.SetBindGroup(0, this->computeVoxelPipeline.bindGroup);
+        pass.SetBindGroup(0, this->computeVoxelPipeline.bindGroups[0]);
 
         uint32_t dispatchX = (renderInfo.width  + 7) / 8;
         uint32_t dispatchY = (renderInfo.height  + 7) / 8;
@@ -393,7 +392,7 @@ void RenderEngine::Render(void* userData)
 
         this->blitVoxelPipeline.AssertInitialized();
         pass.SetPipeline(this->blitVoxelPipeline.pipeline);
-        pass.SetBindGroup(0, this->blitVoxelPipeline.bindGroup);
+        pass.SetBindGroup(0, this->blitVoxelPipeline.bindGroups[0]);
 
         // Fullscreen triangle
         pass.Draw(3);

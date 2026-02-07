@@ -12,6 +12,7 @@
 #include "stb_image.h" 
 
 const double EPSILON = 1e-10;
+const uint32_t NO_TEXTURE = UINT32_MAX;
 
 //================================//
 struct BrickOutput {
@@ -89,8 +90,68 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
         return false;
     }
 
-    unsigned int numEmbeddedTextures = scene->mNumTextures;
-    std::cout << numEmbeddedTextures << " embedded textures found in the model." << std::endl;
+    // construct mapping of material -> albedo texIndex
+    uint32_t numEmbeddedTextures = scene->mNumTextures;
+    std::unordered_map<unsigned int, uint32_t> materialToDiffuseTexture;
+    for (unsigned int matIdx = 0; matIdx < scene->mNumMaterials; matIdx++)
+    {
+        aiMaterial* material = scene->mMaterials[matIdx];
+        aiString diffuseTexturePath;
+
+        if (material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuseTexturePath) == AI_SUCCESS) // Try to get albedo/diffuse texture only
+        {
+            std::string pathStr = diffuseTexturePath.C_Str();
+
+            if (pathStr.size() > 0  && pathStr[0] == '*')
+            {
+                uint32_t embeddedTexIndex = std::stoi(pathStr.substr(1)); // The number after * is the index of the embedded texture I think...
+                materialToDiffuseTexture[matIdx] = embeddedTexIndex;
+            }
+            else
+            {
+                // Try matching
+                for (unsigned int t = 0; t < scene->mNumTextures; t++)
+                {
+                    if (scene->mTextures[t]->mFilename.C_Str() == pathStr)
+                    {
+                        materialToDiffuseTexture[matIdx] = t;
+                        break;
+                    }
+                }
+            }
+        }
+        else
+        {
+            materialToDiffuseTexture[matIdx] = NO_TEXTURE; // this material has no albedo tex
+        }
+    }
+
+    uint32_t diffuseCount = 0;
+    std::unordered_map<uint32_t, uint32_t> embeddedToDenseIndex;
+
+    for (auto& [matIdx, embTexIdx] : materialToDiffuseTexture)
+    {
+        if (embTexIdx == NO_TEXTURE) continue;
+        if (embeddedToDenseIndex.find(embTexIdx) == embeddedToDenseIndex.end())
+        {
+            embeddedToDenseIndex[embTexIdx] = diffuseCount++;
+        }
+    }
+
+    std::cout << "[Voxelizer] Found " << diffuseCount << " unique embedded diffuse textures referenced by materials." << std::endl;
+
+    // Dense remap
+    for (auto& [matIdx, embTexIdx] : materialToDiffuseTexture)
+    {
+        if (embTexIdx == NO_TEXTURE)
+        {
+            embTexIdx = diffuseCount; // will point to the white fallback
+        }
+        else
+        {
+            embTexIdx = embeddedToDenseIndex[embTexIdx];
+        }
+    }
 
     size_t totalVertices = 0;
     size_t totalFaces = 0;
@@ -104,12 +165,13 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     this->facesVec.reserve(totalFaces);
     this->normalsVec.reserve(totalVertices);
     this->uvsVec.reserve(totalVertices);
-    this->textureIndicesVec.reserve(totalVertices);
+    this->textureIndicesVec.reserve(totalFaces);
     size_t vertexOffset = 0;
 
     for (unsigned int m = 0; m < scene->mNumMeshes; m++)
     {
         aiMesh* mesh = scene->mMeshes[m];
+        unsigned int materialIndex = mesh->mMaterialIndex;
 
         // Vertices
         for (unsigned int v = 0; v < mesh->mNumVertices; v++)
@@ -149,16 +211,6 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
             {
                 this->uvsVec.push_back({0.0, 0.0});
             }
-
-            // Which texture is it going to use
-            if (numEmbeddedTextures > 0)
-            {
-                this->textureIndicesVec.push_back(mesh->mMaterialIndex);
-            }
-            else
-            {
-                this->textureIndicesVec.push_back(0); // First texture
-            }
         }
 
         // FACES
@@ -172,6 +224,10 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
                     static_cast<int>(vertexOffset + face.mIndices[1]),
                     static_cast<int>(vertexOffset + face.mIndices[2])
                 });
+
+                auto it = materialToDiffuseTexture.find(mesh->mMaterialIndex);
+                uint32_t texIdx = (it != materialToDiffuseTexture.end()) ? it->second : 0;
+                this->textureIndicesVec.push_back(texIdx);
             }
         }
 
@@ -212,38 +268,35 @@ bool Voxelizer::loadMesh(const std::string& filename, const std::string& texture
     // Embedded texture?
     if (scene->HasTextures() && scene->mNumTextures > 0)
     {
-        for (int i = 0; i < scene->mNumTextures; i++)
+        this->texturesInfo.resize(diffuseCount);
+        for (auto& [embIdx, denseIdx] : embeddedToDenseIndex)
         {
-            this->texturesInfo.push_back({false, 0, 0, 0, nullptr, ""});
-            aiTexture* tex = scene->mTextures[i];
+            aiTexture* tex = scene->mTextures[embIdx];
+            this->texturesInfo[denseIdx] = {false, 0, 0, 0, nullptr, ""};
 
             if (tex->mHeight == 0) // Compressed texture like PNG or JPG
             {
-                this->texturesInfo[i].data = stbi_load_from_memory(
+                this->texturesInfo[denseIdx].data = stbi_load_from_memory(
                     reinterpret_cast<unsigned char*>(tex->pcData),
                     tex->mWidth,
-                    &this->texturesInfo[i].width, &this->texturesInfo[i].height, &this->texturesInfo[i].channels, 0
+                    &this->texturesInfo[denseIdx].width, &this->texturesInfo[denseIdx].height, &this->texturesInfo[denseIdx].channels, 0
                 );
-                this->texturesInfo[i].hasTexture = (this->texturesInfo[i].data != nullptr);
-                if (this->texturesInfo[i].hasTexture)
+                this->texturesInfo[denseIdx].hasTexture = (this->texturesInfo[denseIdx].data != nullptr);
+                if (this->texturesInfo[denseIdx].hasTexture)
                 {
-                    this->texturesInfo[i].name = tex->mFilename.C_Str();
-                    std::cout << "[Voxelizer] Loaded embedded texture: " 
-                            << this->texturesInfo[i].width << "x" << this->texturesInfo[i].height << " with name: " << this->texturesInfo[i].name << std::endl;
+                    this->texturesInfo[denseIdx].name = tex->mFilename.C_Str();
                 }
             }
             else // Raw, uncompressed texture data
             {
-                this->texturesInfo[i].width = tex->mWidth;
-                this->texturesInfo[i].height = tex->mHeight;
-                this->texturesInfo[i].channels = 4; // ARGB8888
+                this->texturesInfo[denseIdx].width = tex->mWidth;
+                this->texturesInfo[denseIdx].height = tex->mHeight;
+                this->texturesInfo[denseIdx].channels = 4; // ARGB8888
                 size_t dataSize = tex->mWidth * tex->mHeight * 4;
-                this->texturesInfo[i].data = new unsigned char[dataSize];
-                std::memcpy(this->texturesInfo[i].data, tex->pcData, dataSize);
-                this->texturesInfo[i].hasTexture = true;
-                this->texturesInfo[i].name = tex->mFilename.C_Str();
-                std::cout << "[Voxelizer] Loaded RAW embedded texture: " 
-                        << this->texturesInfo[i].width << "x" << this->texturesInfo[i].height << " with name: " << this->texturesInfo[i].name << std::endl;
+                this->texturesInfo[denseIdx].data = new unsigned char[dataSize];
+                std::memcpy(this->texturesInfo[denseIdx].data, tex->pcData, dataSize);
+                this->texturesInfo[denseIdx].hasTexture = true;
+                this->texturesInfo[denseIdx].name = tex->mFilename.C_Str();
             }
         }
     }
@@ -552,6 +605,14 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
         samplerDesc.minFilter = wgpu::FilterMode::Nearest;
         this->textureSamplers[0] = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
     }
+
+    // [9] texture index buffer
+    bufferDesc.size = sizeof(uint32_t) * this->facesVec.size();
+    bufferDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    bufferDesc.mappedAtCreation = false;
+    bufferDesc.label = "Texture Index Buffer";
+    this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->textureIndexBuffer);
+    queue.WriteBuffer(this->textureIndexBuffer, 0, this->textureIndicesVec.data(), bufferDesc.size);
 }
 
 //================================//
@@ -664,25 +725,39 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
 
         // [1] Voxelization pass
         {
-            wgpu::BindGroupEntry entries[7]{};
+            wgpu::BindGroupEntry entries[6]{};
             entries[0].binding = 0; entries[0].buffer = uniformBuffer; entries[0].size = sizeof(VoxelizerUniforms);
             entries[1].binding = 1; entries[1].buffer = this->vertexBuffer; entries[1].size = sizeof(Vertex) * verticesVec.size();
             entries[2].binding = 2; entries[2].buffer = this->triangleBuffer; entries[2].size = sizeof(Triangle) * facesVec.size();
-            entries[3].binding = 3; entries[3].textureView = this->textureViews[0];
-            entries[4].binding = 4; entries[4].sampler = this-> textureSamplers[0];
-            entries[5].binding = 5; entries[5].buffer = this->occupancyBuffer; entries[5].size = sizeof(uint32_t) * 16 * bricksThisPass;
-            entries[6].binding = 6; entries[6].buffer = this->denseColorsBuffer; entries[6].size = sizeof(uint32_t) * bricksThisPass * 512;
-
+            entries[3].binding = 3; entries[3].buffer = this->occupancyBuffer; entries[3].size = sizeof(uint32_t) * 16 * bricksThisPass;
+            entries[4].binding = 4; entries[4].buffer = this->denseColorsBuffer; entries[4].size = sizeof(uint32_t) * bricksThisPass * 512;
+            entries[5].binding = 5; entries[5].buffer = this->textureIndexBuffer; entries[5].size = sizeof(uint32_t) * this->facesVec.size();
             wgpu::BindGroupDescriptor bindGroupDesc{};
-            bindGroupDesc.layout = this->voxelizationPipeline.bindGroupLayout;
-            bindGroupDesc.entryCount = 7;
+            bindGroupDesc.layout = this->voxelizationPipeline.bindGroupLayouts[0];
+            bindGroupDesc.entryCount = 6;
             bindGroupDesc.entries = entries;
-            wgpu::BindGroup bindGroup = device.CreateBindGroup(&bindGroupDesc);
+            wgpu::BindGroup firstBindGroup = device.CreateBindGroup(&bindGroupDesc);
+
+            wgpu::BindGroupEntry textureEntries[MAX_TEXTURES * 2]{}; // One sampler and one texture view per texture
+            for (size_t i = 0; i < MAX_TEXTURES; i++)
+            {
+                size_t srcIdx = (i < this->textureViews.size()) ? i : 0;
+                textureEntries[i * 2].binding = static_cast<uint32_t>(i * 2); // Texture view binding
+                textureEntries[i * 2].textureView = this->textureViews[srcIdx];
+                textureEntries[i * 2 + 1].binding = static_cast<uint32_t>(i * 2 + 1); // Sampler binding
+                textureEntries[i * 2 + 1].sampler = this->textureSamplers[srcIdx];
+            }
+            wgpu::BindGroupDescriptor textureBindGroupDesc{};
+            textureBindGroupDesc.layout = this->voxelizationPipeline.bindGroupLayouts[1];
+            textureBindGroupDesc.entryCount = MAX_TEXTURES * 2;
+            textureBindGroupDesc.entries = textureEntries;
+            wgpu::BindGroup textureBindGroup = device.CreateBindGroup(&textureBindGroupDesc);
 
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
             wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
             pass.SetPipeline(this->voxelizationPipeline.computePipeline);
-            pass.SetBindGroup(0, bindGroup);
+            pass.SetBindGroup(0, firstBindGroup);
+            pass.SetBindGroup(1, textureBindGroup);
 
             uint32_t numWorkGroups = (bricksThisPass + 63) / 64;
             pass.DispatchWorkgroups(numWorkGroups, 1, 1);
@@ -701,9 +776,9 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             entries[3].binding = 3; entries[3].buffer = this->brickOutputBuffer; entries[3].size = sizeof(BrickOutput) * bricksThisPass;
             entries[4].binding = 4; entries[4].buffer = this->packedColorBuffer; entries[4].size = sizeof(uint32_t) * bricksThisPass * 512;
             entries[5].binding = 5; entries[5].buffer = this->countersBuffer; entries[5].size = sizeof(uint32_t) * 2;
-
+            
             wgpu::BindGroupDescriptor bindGroupDesc{};
-            bindGroupDesc.layout = this->compactVoxelPipeline.bindGroupLayout;
+            bindGroupDesc.layout = this->compactVoxelPipeline.bindGroupLayouts[0];
             bindGroupDesc.entryCount = 6;
             bindGroupDesc.entries = entries;
             wgpu::BindGroup bindGroup = device.CreateBindGroup(&bindGroupDesc);

@@ -29,10 +29,22 @@ struct Triangle {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read> vertices: array<Vertex>;
 @group(0) @binding(2) var<storage, read> triangles: array<Triangle>;
-@group(0) @binding(3) var meshTexture: texture_2d<f32>;
-@group(0) @binding(4) var meshSampler: sampler;
-@group(0) @binding(5) var<storage, read_write> occupancy: array<atomic<u32>>;
-@group(0) @binding(6) var<storage, read_write> denseColors: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> occupancy: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> denseColors: array<atomic<u32>>;
+@group(0) @binding(5) var<storage, read> textureIndices: array<u32>; // Determines which texture the triangle is using, 0 - 4
+
+@group(1) @binding(0) var texture_0: texture_2d<f32>;
+@group(1) @binding(1) var sampler_0: sampler;
+@group(1) @binding(2) var texture_1: texture_2d<f32>;
+@group(1) @binding(3) var sampler_1: sampler;
+@group(1) @binding(4) var texture_2: texture_2d<f32>;
+@group(1) @binding(5) var sampler_2: sampler;
+@group(1) @binding(6) var texture_3: texture_2d<f32>;
+@group(1) @binding(7) var sampler_3: sampler;
+@group(1) @binding(8) var texture_4: texture_2d<f32>;
+@group(1) @binding(9) var sampler_4: sampler;
+@group(1) @binding(10) var texture_5: texture_2d<f32>;
+@group(1) @binding(11) var sampler_5: sampler;
 
 //================================//
 fn packColor(r: u32, g: u32, b: u32) -> u32 
@@ -219,7 +231,19 @@ fn c(@builtin(global_invocation_id) gid: vec3<u32>)
                     // Sample color
                     let bary = barycentric(voxelCenter, p0, p1, p2);
                     let uv = bary.x * v0.uv + bary.y * v1.uv + bary.z * v2.uv;
-                    let texColor = textureSampleLevel(meshTexture, meshSampler, uv, 0.0);
+                    let texIndex = textureIndices[triIndex];
+
+                    var texColor: vec4f;
+                    switch (texIndex) 
+                    {
+                        case 0u: { texColor = textureSampleLevel(texture_0, sampler_0, uv, 0.0); }
+                        case 1u: { texColor = textureSampleLevel(texture_1, sampler_1, uv, 0.0); }
+                        case 2u: { texColor = textureSampleLevel(texture_2, sampler_2, uv, 0.0); }
+                        case 3u: { texColor = textureSampleLevel(texture_3, sampler_3, uv, 0.0); }
+                        case 4u: { texColor = textureSampleLevel(texture_4, sampler_4, uv, 0.0); }
+                        case 5u: { texColor = textureSampleLevel(texture_5, sampler_5, uv, 0.0); }
+                        default: { texColor = vec4f(1.0, 1.0, 1.0, 1.0); }
+                    }
 
                     let r = u32(clamp(texColor.r * 255.0, 0.0, 255.0));
                     let g = u32(clamp(texColor.g * 255.0, 0.0, 255.0));

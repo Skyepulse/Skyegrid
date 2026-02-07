@@ -1070,9 +1070,9 @@ void VoxelManager::createUploadBindGroup(RenderPipelineWrapper& pipelineWrapper,
     }
 
     wgpu::BindGroupDescriptor bindGroupDesc{};
-    bindGroupDesc.layout = pipelineWrapper.bindGroupLayout;
+    bindGroupDesc.layout = pipelineWrapper.bindGroupLayouts[0];
     bindGroupDesc.entryCount = 6;
     bindGroupDesc.entries = entries;
 
-    pipelineWrapper.bindGroup = wgpuBundle.GetDevice().CreateBindGroup(&bindGroupDesc);
+    pipelineWrapper.bindGroups[0] = wgpuBundle.GetDevice().CreateBindGroup(&bindGroupDesc);
 }

@@ -11,8 +11,8 @@ struct RenderPipelineWrapper
     wgpu::ComputePipeline computePipeline;
     wgpu::PipelineLayout pipelineLayout;
 
-    wgpu::BindGroup bindGroup;
-    wgpu::BindGroupLayout bindGroupLayout;
+    std::vector<wgpu::BindGroup> bindGroups;
+    std::vector<wgpu::BindGroupLayout> bindGroupLayouts;
 
     wgpu::ShaderModule shaderModule;
 
@@ -28,6 +28,14 @@ struct RenderPipelineWrapper
     std::vector<size_t>         bufferSizes;
     std::vector<size_t>         uniformSizes;
     std::vector<size_t>         textureSizes;
+
+    // Default initialization for a normal render pipeline
+    void initialize(int numBindGroups = 1)
+    {
+        // Generally one bind group layout and one bind group
+        this->bindGroupLayouts.resize(numBindGroups);
+        this->bindGroups.resize(numBindGroups);
+    }
 
     // Small method to call and assert initialization
     void AssertInitialized()

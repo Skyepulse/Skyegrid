@@ -58,6 +58,7 @@ void CreateRenderPipelineDebug(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pi
 void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper, int numColorBuffers)
 {
     pipelineWrapper.isCompute = true;
+    pipelineWrapper.initialize();
 
     // Number of textures: 1 (the output voxel texture)
     pipelineWrapper.textureSizes.resize(1);
@@ -149,12 +150,12 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 10;
     bindGroupLayoutDesc.entries = entries;
-    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+    pipelineWrapper.bindGroupLayouts[0] = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
     // Pipeline Layout
     wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
     pipelineLayoutDesc.bindGroupLayoutCount = 1;
-    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayouts[0];
     pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
 
     // Compute Pipeline
@@ -172,6 +173,7 @@ void CreateComputeVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
 void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper, int numColorBuffers)
 {
     pipelineWrapper.isCompute = true;
+    pipelineWrapper.initialize();
 
     // SHADER 
     std::string shaderCode;
@@ -219,12 +221,12 @@ void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrap
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 3 + numColorBuffers;
     bindGroupLayoutDesc.entries = entries;
-    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+    pipelineWrapper.bindGroupLayouts[0] = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
     // Pipeline Layout
     wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
     pipelineLayoutDesc.bindGroupLayoutCount = 1;
-    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayouts[0];
     pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
 
     // Compute Pipeline
@@ -241,6 +243,8 @@ void CreateComputeUploadVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrap
 //================================//
 void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
 {
+    pipelineWrapper.initialize();
+
     // Code in ../../../src/Shaders/blit.wgsl
     std::string shaderCode;
     if (getShaderCodeFromFile("Shaders/blit.wgsl", shaderCode) < 0)
@@ -282,12 +286,12 @@ void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipe
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 2;
     bindGroupLayoutDesc.entries = entries;
-    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+    pipelineWrapper.bindGroupLayouts[0] = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
     // Pipeline Layout
     wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
     pipelineLayoutDesc.bindGroupLayoutCount = 1;
-    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayouts[0];
     pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
 
     // Pipeline
@@ -328,6 +332,7 @@ void CreateBlitVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipe
 void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
 {
     pipelineWrapper.isCompute = true;
+    pipelineWrapper.initialize(2);
 
     // SHADER 
     std::string shaderCode;
@@ -349,7 +354,7 @@ void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     pipelineWrapper.shaderModule = wgpuBundle.GetDevice().CreateShaderModule(&shaderModuleDesc);
 
     // Bind Group Layout
-    wgpu::BindGroupLayoutEntry entries[7]{};
+    wgpu::BindGroupLayoutEntry entries[6]{};
 
     // uniform
     entries[0].binding = 0;
@@ -366,37 +371,52 @@ void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     entries[2].visibility = wgpu::ShaderStage::Compute;
     entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
 
-    // Texture view
+    // occupancy buffer
     entries[3].binding = 3;
     entries[3].visibility = wgpu::ShaderStage::Compute;
-    entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-    entries[3].texture.viewDimension = wgpu::TextureViewDimension::e2D;
-    entries[3].texture.multisampled = false;
-
-    // Texture sampler
-    entries[4].binding = 4;
-    entries[4].visibility = wgpu::ShaderStage::Compute;
-    entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
-
-    // occupancy buffer
-    entries[5].binding = 5;
-    entries[5].visibility = wgpu::ShaderStage::Compute;
-    entries[5].buffer.type = wgpu::BufferBindingType::Storage;
+    entries[3].buffer.type = wgpu::BufferBindingType::Storage;
 
     // dense colors buffer
-    entries[6].binding = 6;
-    entries[6].visibility = wgpu::ShaderStage::Compute;
-    entries[6].buffer.type = wgpu::BufferBindingType::Storage;
+    entries[4].binding = 4;
+    entries[4].visibility = wgpu::ShaderStage::Compute;
+    entries[4].buffer.type = wgpu::BufferBindingType::Storage;
+
+    // texture index buffer
+    entries[5].binding = 5;
+    entries[5].visibility = wgpu::ShaderStage::Compute;
+    entries[5].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    wgpu::BindGroupLayoutEntry textureEntries[12]{}; // 6 textures -> 6 * 2 entries for texture + sampler
+
+    for (int i = 0; i < 6; ++i)
+    {
+        // texture
+        textureEntries[i * 2].binding = i * 2;
+        textureEntries[i * 2].visibility = wgpu::ShaderStage::Compute;
+        textureEntries[i * 2].texture.sampleType = wgpu::TextureSampleType::Float;
+        textureEntries[i * 2].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+        textureEntries[i * 2].texture.multisampled = false;
+
+        // sampler
+        textureEntries[i * 2 + 1].binding = i * 2 + 1;
+        textureEntries[i * 2 + 1].visibility = wgpu::ShaderStage::Compute;
+        textureEntries[i * 2 + 1].sampler.type = wgpu::SamplerBindingType::Filtering;
+    }
+
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
-    bindGroupLayoutDesc.entryCount = 7;
+    bindGroupLayoutDesc.entryCount = 6;
     bindGroupLayoutDesc.entries = entries;
-    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+    pipelineWrapper.bindGroupLayouts[0] = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+    wgpu::BindGroupLayoutDescriptor textureBindGroupLayoutDesc{};
+    textureBindGroupLayoutDesc.entryCount = 12;
+    textureBindGroupLayoutDesc.entries = textureEntries;
+    pipelineWrapper.bindGroupLayouts[1] = wgpuBundle.GetDevice().CreateBindGroupLayout(&textureBindGroupLayoutDesc);
 
     // Pipeline Layout
     wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
-    pipelineLayoutDesc.bindGroupLayoutCount = 1;
-    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineLayoutDesc.bindGroupLayoutCount = 2;
+    pipelineLayoutDesc.bindGroupLayouts = pipelineWrapper.bindGroupLayouts.data();
     pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
 
     // Compute Pipeline
@@ -414,6 +434,7 @@ void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
 void CreateCompactVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& pipelineWrapper)
 {
     pipelineWrapper.isCompute = true;
+    pipelineWrapper.initialize();
 
     // SHADER 
     std::string shaderCode;
@@ -470,12 +491,12 @@ void CreateCompactVoxelPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 6;
     bindGroupLayoutDesc.entries = entries;
-    pipelineWrapper.bindGroupLayout = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
+    pipelineWrapper.bindGroupLayouts[0] = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
 
     // Pipeline Layout
     wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
     pipelineLayoutDesc.bindGroupLayoutCount = 1;
-    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayout;
+    pipelineLayoutDesc.bindGroupLayouts = &pipelineWrapper.bindGroupLayouts[0];
     pipelineWrapper.pipelineLayout = wgpuBundle.GetDevice().CreatePipelineLayout(&pipelineLayoutDesc);
 
     // Compute Pipeline

@@ -2,25 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "(Linux) Launch Executable",
-      "type": "cppdbg",
+      "name": "(Windows) Launch Executable",
+      "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/Skyegrid",  // Path to your executable
-      "args": ["1000", "1", "data/WallE_1024.vox"],                           // Command-line arguments (if any)
+      "program": "${workspaceFolder}/build/Debug/Skyegrid.exe",
+      "args": ["1000", "1", "data/bunny.vox"],
       "stopAtEntry": false,
-      "cwd": "${workspaceFolder}",                           // Working directory
+      "cwd": "${workspaceFolder}",
       "environment": [],
-      "externalConsole": true,                         // Use external terminal
-      "MIMode": "gdb",
-      "miDebuggerPath": "/usr/bin/gdb",
-      "setupCommands": [
-        {
-          "description": "Enable pretty-printing for gdb",
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
-        }
-      ],
-      "symbolSearchPath": "${workspaceFolder}/src"          // Path to source files (for breakpoints)
+      "console": "externalTerminal"
     }
   ]
 }

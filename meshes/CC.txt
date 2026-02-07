@@ -3,5 +3,6 @@ Flask: "Medieval Flask" (https://skfb.ly/6RT9p) by Austin Crane (Euclid) is lice
 Cake: "Stylized Cream Cake and headphones🍰" (https://skfb.ly/oDyU8) by Bársh is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
 Meat: "Meat" (https://skfb.ly/o6rJu) by Coffeek is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
 Shiba: "Shiba" (https://skfb.ly/6WxVW) by zixisun02 is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
-Room: "Tiny Isometric Room" (https://skfb.ly/6Vy6D) by 3DECraft is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
-Bunny: "Tiny Isometric Room" (https://skfb.ly/6Vy6D) by 3DECraft is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
+Trailer: "Trailer" (https://skfb.ly/6RMup) by Alyona Shek is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
+Vino: "Vino" (https://skfb.ly/opBPq) by minghauLoh is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).
+Lighthouse: "The Lighthouse" (https://skfb.ly/6rU7V) by cotman sam is licensed under Creative Commons Attribution (http://creativecommons.org/licenses/by/4.0/).

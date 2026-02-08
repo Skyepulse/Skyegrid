@@ -181,6 +181,10 @@ void VoxelManager::loadFile(const std::string& filename)
         return;
     }
 
+    if (this->voxelFileReader)
+    {
+        this->voxelFileReader.reset();
+    }
     this->voxelFileReader = std::make_unique<VoxelFileReader>(filename);
     this->loadedMesh = true;
 }

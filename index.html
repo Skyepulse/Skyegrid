@@ -1,0 +1,214 @@
+
+<!DOCTYPE html>
+<!-- THIS FILE IS TO BE ADDED NEXT TO SKYEGRID.JS, SKYEGRID.WASM, AND SKYEGRID.DATA -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skyegrid Web Demo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #000;
+            overflow: hidden;
+        }
+
+        .container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+            overflow: hidden;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            z-index: 10;
+        }
+
+        .loading-overlay.hidden { display: none; }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid #404040;
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 16px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loading-text { font-size: 18px; }
+
+        .error-text {
+            color: #f87171;
+            margin-top: 16px;
+            font-size: 14px;
+            display: none;
+        }
+
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .controls-help {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            z-index: 20;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+            font-family: monospace;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .controls-help:hover { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="container" id="container">
+        <div class="loading-overlay" id="loading">
+            <div class="spinner"></div>
+            <p class="loading-text">Loading Skyegrid... <span id="progress">0</span>%</p>
+            <p class="error-text" id="error"></p>
+        </div>
+
+        <canvas id="canvas" oncontextmenu="return false;"></canvas>
+    </div>
+
+    <script>
+        //================================//
+        const container = document.getElementById('container');
+        const canvas = document.getElementById('canvas');
+        const loadingOverlay = document.getElementById('loading');
+        const progressEl = document.getElementById('progress');
+        const errorEl = document.getElementById('error');
+
+        let moduleInstance = null;
+        const initialWidth = window.innerWidth;
+        const initialHeight = window.innerHeight;
+
+        const progress = { completedBytes: 0, currentReceived: 0, currentTotal: 0, lastTotal: 0 };
+
+        //================================//
+        function resizeCanvas() 
+        {
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+        }
+
+        //================================//
+        function showError(message) 
+        {
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+        }
+
+        //================================//
+        function hideLoading() 
+        {
+            loadingOverlay.classList.add('hidden');
+        }
+
+        //================================//
+        function updateProgress(text) 
+        {
+            if (!text) return;
+            const match = text.match(/(\d+)\/(\d+)/);
+            if (!match) return;
+
+            const received = parseInt(match[1]);
+            const total = parseInt(match[2]);
+
+            if (total !== progress.lastTotal) 
+            {
+                progress.completedBytes += progress.currentTotal;
+                progress.lastTotal = total;
+            }
+
+            progress.currentReceived = received;
+            progress.currentTotal = total;
+
+            const grandTotal = progress.completedBytes + progress.currentTotal;
+            const grandReceived = progress.completedBytes + progress.currentReceived;
+            const pct = grandTotal > 0 ? Math.round(100 * grandReceived / grandTotal) : 0;
+            progressEl.textContent = pct;
+        }
+
+        async function initModule() 
+        {
+            if (!self.specialHTMLTargets) self.specialHTMLTargets = { 0: 0 };
+            self.specialHTMLTargets['!canvas'] = canvas;
+            self.specialHTMLTargets['#canvas'] = canvas;
+
+            moduleInstance = await window.createSkyegridModule({
+                canvas: canvas,
+                locateFile: (path) => '/projects/skyegrid/' + path,
+                setStatus: updateProgress,
+                onRuntimeInitialized: () => { hideLoading(); resizeCanvas(); },
+                monitorRunDependencies: (left) => { if (left === 0) hideLoading(); }
+            });
+        }
+
+        async function loadSkyegrid() 
+        {
+            try {
+                if (!canvas) { showError('Canvas element not found'); return; }
+
+                if (typeof window.createSkyegridModule === 'function') 
+                {
+                    await initModule();
+                    return;
+                }
+
+                const script = document.createElement('script');
+                script.src = '/projects/skyegrid/Skyegrid.js';
+
+                await new Promise((resolve, reject) => 
+                {
+                    script.onload = resolve;
+                    script.onerror = () => reject(new Error('Failed to load Skyegrid.js'));
+                    document.body.appendChild(script);
+                });
+
+                await new Promise(resolve => setTimeout(resolve, 50));
+
+                if (!window.createSkyegridModule) 
+                {
+                    throw new Error('createSkyegridModule not defined after script load');
+                }
+
+                await initModule();
+            } 
+            catch (error) 
+            {
+                showError(error.message || 'Unknown error');
+            }
+        }
+
+        window.addEventListener('resize', () => 
+        {
+            if (window.innerWidth !== initialWidth || window.innerHeight !== initialHeight) {
+                window.location.reload();
+            }
+        });
+
+        resizeCanvas();
+        loadSkyegrid();
+    </script>
+</body>
+</html>

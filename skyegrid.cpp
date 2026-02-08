@@ -2,8 +2,14 @@
 #include "includes/SkyegridManager.hpp"
 #include <charconv>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 const int voxel_resolution =  512;
 const int max_visible_bricks =  100000;
+
+std::unique_ptr<SkyegridManager> g_manager;
 
 //================================//
 int main(int argc, char** argv)
@@ -47,12 +53,14 @@ int main(int argc, char** argv)
         fileName = argv[3];
     }
 
-    std::unique_ptr<SkyegridManager> manager = std::make_unique<SkyegridManager>(false, value1, value2);
-    manager->LoadVoxelFile(fileName);
-    manager->InitGraphics();
-    manager->RunMainLoop();
+    g_manager = std::make_unique<SkyegridManager>(false, value1, value2);
+    g_manager->LoadVoxelFile(fileName);
+    g_manager->InitGraphics();
+    g_manager->RunMainLoop();
 
-    manager.reset();
+#ifndef __EMSCRIPTEN__
+    g_manager.reset();
+#endif
 
     std::cout << "Exiting application.\n";
     return 0;

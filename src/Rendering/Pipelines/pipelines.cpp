@@ -386,30 +386,23 @@ void CreateVoxelizationPipeline(WgpuBundle& wgpuBundle, RenderPipelineWrapper& p
     entries[5].visibility = wgpu::ShaderStage::Compute;
     entries[5].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
 
-    wgpu::BindGroupLayoutEntry textureEntries[12]{}; // 6 textures -> 6 * 2 entries for texture + sampler
+    wgpu::BindGroupLayoutEntry textureEntries[2]{}; // One texture array, one sampler
+    textureEntries[0].binding = 0;
+    textureEntries[0].visibility = wgpu::ShaderStage::Compute;
+    textureEntries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    textureEntries[0].texture.viewDimension = wgpu::TextureViewDimension::e2DArray; // here specify that it is an array
+    textureEntries[0].texture.multisampled = false;
 
-    for (int i = 0; i < 6; ++i)
-    {
-        // texture
-        textureEntries[i * 2].binding = i * 2;
-        textureEntries[i * 2].visibility = wgpu::ShaderStage::Compute;
-        textureEntries[i * 2].texture.sampleType = wgpu::TextureSampleType::Float;
-        textureEntries[i * 2].texture.viewDimension = wgpu::TextureViewDimension::e2D;
-        textureEntries[i * 2].texture.multisampled = false;
-
-        // sampler
-        textureEntries[i * 2 + 1].binding = i * 2 + 1;
-        textureEntries[i * 2 + 1].visibility = wgpu::ShaderStage::Compute;
-        textureEntries[i * 2 + 1].sampler.type = wgpu::SamplerBindingType::Filtering;
-    }
-
+    textureEntries[1].binding = 1;
+    textureEntries[1].visibility = wgpu::ShaderStage::Compute;
+    textureEntries[1].sampler.type = wgpu::SamplerBindingType::Filtering;
 
     wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
     bindGroupLayoutDesc.entryCount = 6;
     bindGroupLayoutDesc.entries = entries;
     pipelineWrapper.bindGroupLayouts[0] = wgpuBundle.GetDevice().CreateBindGroupLayout(&bindGroupLayoutDesc);
     wgpu::BindGroupLayoutDescriptor textureBindGroupLayoutDesc{};
-    textureBindGroupLayoutDesc.entryCount = 12;
+    textureBindGroupLayoutDesc.entryCount = 2;
     textureBindGroupLayoutDesc.entries = textureEntries;
     pipelineWrapper.bindGroupLayouts[1] = wgpuBundle.GetDevice().CreateBindGroupLayout(&textureBindGroupLayoutDesc);
 

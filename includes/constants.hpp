@@ -14,4 +14,6 @@ constexpr bool HAS_VOXEL_COLOR = true;
 
 constexpr uint32_t MAX_BUFFER_SIZE = UINT32_MAX - 1;
 
+constexpr uint32_t MAX_TEXTURE_ARRAY_LAYERS = 50;
+
 #endif // CONSTANTS_HPP

@@ -3,6 +3,7 @@
 
 #include "Rendering/wgpuBundle.hpp"
 #include "Rendering/Pipelines/pipelines.hpp"
+#include "constants.hpp"
 #include <algorithm>
 #include <vector>
 #include <array>
@@ -13,8 +14,6 @@
 // Forward declarations
 class VoxelFileWriter;
 class VoxelFileReader;
-
-const uint32_t MAX_TEXTURES = 6;
 
 //================================//
 struct VoxelizerUniforms
@@ -54,6 +53,12 @@ struct TextureInfo
     int channels;
     unsigned char* data;
     std::string name;
+};
+
+struct RGBALayer 
+{
+    std::vector<uint8_t> data;
+    int width, height;
 };
 
 //================================//

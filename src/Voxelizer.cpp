@@ -63,6 +63,38 @@ static bool safeTextureLoad(const std::string& texturePath, unsigned char** text
 }
 
 //================================//
+static std::vector<uint8_t> resizeRGBA(const uint8_t* src, int srcW, int srcH, int dstW, int dstH)
+{
+    std::vector<uint8_t> dst(dstW * dstH * 4); // Desired output size init
+    for (int y = 0; y < dstH; y++)
+    {
+        float srcY = (y + 0.5f) * srcH / (float)dstH - 0.5f;
+        int y0 = std::max(0, (int)std::floor(srcY));
+        int y1 = std::min(srcH - 1, y0 + 1);
+        float fy = srcY - y0;
+
+        for (int x = 0; x < dstW; x++)
+        {
+            float srcX = (x + 0.5f) * srcW / (float)dstW - 0.5f;
+            int x0 = std::max(0, (int)std::floor(srcX));
+            int x1 = std::min(srcW - 1, x0 + 1);
+            float fx = srcX - x0;
+
+            for (int c = 0; c < 4; c++) // 4 channels (RGBA)
+            {
+                float v00 = src[(y0 * srcW + x0) * 4 + c];
+                float v10 = src[(y0 * srcW + x1) * 4 + c];
+                float v01 = src[(y1 * srcW + x0) * 4 + c];
+                float v11 = src[(y1 * srcW + x1) * 4 + c];
+                float val = v00 * (1-fx)*(1-fy) + v10 * fx*(1-fy) + v01 * (1-fx)*fy + v11 * fx*fy;
+                dst[(y * dstW + x) * 4 + c] = static_cast<uint8_t>(std::clamp(val, 0.0f, 255.0f));
+            }
+        }
+    }
+    return dst;
+}
+
+//================================//
 bool Voxelizer::loadMesh(const std::string& filename, const std::string& texturePath)
 {
     this->verticesVec.clear();
@@ -460,153 +492,151 @@ void Voxelizer::initializeGpuResources(uint32_t maxBricksPerPass)
     bufferDesc.label = "Packed Color Readback Buffer";
     this->gpuBundle->SafeCreateBuffer(&bufferDesc, this->packedColorReadbackBuffer);
 
-    // [8] texture, texture view, sampler
+    // [9] texture, texture view, sampler
     this->textures.clear();
     this->textureViews.clear();
     this->textureSamplers.clear();
     
-    unsigned int numTextures = std::min(static_cast<unsigned int>(this->texturesInfo.size()), MAX_TEXTURES);
+    unsigned int numTextures = std::min(static_cast<unsigned int>(this->texturesInfo.size()), MAX_TEXTURE_ARRAY_LAYERS);
  
-    if (numTextures != 0)
+    std::vector<RGBALayer> rgbaLayers;
+    for(size_t i = 0; i < numTextures; i++)
     {
-        this->textures.resize(numTextures);
-        this->textureViews.resize(numTextures);
-        this->textureSamplers.resize(numTextures);
+        TextureInfo& texInfo = this->texturesInfo[i];
+        RGBALayer layer;
 
-        for (int i = 0; i < numTextures; i++)
+        if(!texInfo.hasTexture)
         {
-            TextureInfo& texInfo = this->texturesInfo[i];
-            if (!texInfo.hasTexture)
-                continue;
+            layer.width = 1;
+            layer.height = 1;
+            layer.data = {255, 255, 255, 255}; 
+        }
+        else
+        {
+            layer.width = texInfo.width;
+            layer.height = texInfo.height;
 
-            wgpu::TextureDescriptor textureDesc{};
-            textureDesc.size = {static_cast<uint32_t>(texInfo.width), static_cast<uint32_t>(texInfo.height), 1};
-            textureDesc.mipLevelCount = 1;
-            textureDesc.sampleCount = 1;
-            textureDesc.dimension = wgpu::TextureDimension::e2D;
-            textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-            textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-            textureDesc.label = "Mesh Texture";
-
-            this->textures[i] = this->gpuBundle->GetDevice().CreateTexture(&textureDesc);
-            std::vector<uint8_t> rgbaData;
-            if (texInfo.channels == 3) // Convert to RGBA, NEEDED IN COMPUTE SHADER
+            if (texInfo.channels == 4)
             {
-                rgbaData.resize(texInfo.width * texInfo.height * 4);
-                for(int i = 0; i < texInfo.width * texInfo.height; i++)
+                layer.data.assign(texInfo.data, texInfo.data + texInfo.width * texInfo.height * 4);
+            }
+            else if (texInfo.channels == 3)
+            {
+                layer.data.resize(texInfo.width * texInfo.height * 4);
+                for (int p = 0; p < texInfo.width * texInfo.height; p++)
                 {
-                    rgbaData[i * 4 + 0] = texInfo.data[i * 3 + 0];
-                    rgbaData[i * 4 + 1] = texInfo.data[i * 3 + 1];
-                    rgbaData[i * 4 + 2] = texInfo.data[i * 3 + 2];
-                    rgbaData[i * 4 + 3] = 255;
+                    layer.data[p*4+0] = texInfo.data[p*3+0];
+                    layer.data[p*4+1] = texInfo.data[p*3+1];
+                    layer.data[p*4+2] = texInfo.data[p*3+2];
+                    layer.data[p*4+3] = 255; // opaque anyways, must be RGBA
                 }
             }
-            else if (texInfo.channels == 4)
+            else if (texInfo.channels == 1) // Grayscale case
             {
-                rgbaData.assign(texInfo.data, texInfo.data + (texInfo.width * texInfo.height * texInfo.channels));
-            }
-            else if (texInfo.channels == 1)
-            {
-                rgbaData.resize(texInfo.width * texInfo.height * 4);
-                for(int i = 0; i < texInfo.width * texInfo.height; i++)
+                layer.data.resize(texInfo.width * texInfo.height * 4);
+                for (int p = 0; p < texInfo.width * texInfo.height; p++)
                 {
-                    uint8_t value = texInfo.data[i];
-                    rgbaData[i * 4 + 0] = value;
-                    rgbaData[i * 4 + 1] = value;
-                    rgbaData[i * 4 + 2] = value;
-                    rgbaData[i * 4 + 3] = 255;
+                    uint8_t v = texInfo.data[p];
+                    layer.data[p*4+0] = v;
+                    layer.data[p*4+1] = v;
+                    layer.data[p*4+2] = v;
+                    layer.data[p*4+3] = 255; // opaque, must be RGBA
                 }
             }
             else
             {
-                rgbaData.resize(texInfo.width * texInfo.height * 4, 255); // default white
+                layer.data.resize(texInfo.width * texInfo.height * 4, 255); // Full white
             }
-
-            wgpu::TexelCopyTextureInfo dstTexture{};
-            dstTexture.texture = this->textures[i];
-            dstTexture.mipLevel = 0;
-            dstTexture.origin = {0, 0, 0};
-            dstTexture.aspect = wgpu::TextureAspect::All;
-
-            wgpu::TexelCopyBufferLayout srcBufferLayout{};
-            srcBufferLayout.offset = 0;
-            srcBufferLayout.bytesPerRow = texInfo.width * 4;
-            srcBufferLayout.rowsPerImage = texInfo.height;
-
-            wgpu::Extent3D writeSize{
-                static_cast<uint32_t>(texInfo.width),
-                static_cast<uint32_t>(texInfo.height),
-                1
-            };
-
-            queue.WriteTexture(&dstTexture, rgbaData.data(), rgbaData.size(), &srcBufferLayout, &writeSize);
-
-            wgpu::TextureViewDescriptor viewDesc{};
-            viewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-            viewDesc.dimension = wgpu::TextureViewDimension::e2D;
-            viewDesc.baseMipLevel = 0;
-            viewDesc.mipLevelCount = 1;
-            viewDesc.baseArrayLayer = 0;
-            viewDesc.arrayLayerCount = 1;
-            viewDesc.aspect = wgpu::TextureAspect::All;
-            viewDesc.label = "Mesh Texture View";
-            this->textureViews[i] = this->textures[i].CreateView(&viewDesc);
-
-            wgpu::SamplerDescriptor samplerDesc{};
-            samplerDesc.addressModeU = wgpu::AddressMode::Repeat;
-            samplerDesc.addressModeV = wgpu::AddressMode::Repeat;
-            samplerDesc.addressModeW = wgpu::AddressMode::Repeat;
-            samplerDesc.magFilter = wgpu::FilterMode::Linear;
-            samplerDesc.minFilter = wgpu::FilterMode::Linear;
-            samplerDesc.mipmapFilter = wgpu::MipmapFilterMode::Nearest;
-            samplerDesc.lodMaxClamp = 1.0f;
-            samplerDesc.lodMinClamp = 0.0f;
-            samplerDesc.compare = wgpu::CompareFunction::Undefined;
-            samplerDesc.maxAnisotropy = 1;
-            samplerDesc.label = "Mesh Texture Sampler";
-
-            this->textureSamplers[i] = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
+            rgbaLayers.push_back(layer);
         }
     }
-    else // ALL WHITE TEXTURE BY DEFAULT
+
+    // In case it is empty at least add default white texture
+    if (rgbaLayers.empty())
     {
-        this->textures.resize(1);
-        this->textureViews.resize(1);
-        this->textureSamplers.resize(1);
-        
-        wgpu::TextureDescriptor textureDesc{};
-        textureDesc.size = {1, 1, 1};
-        textureDesc.mipLevelCount = 1;
-        textureDesc.sampleCount = 1;
-        textureDesc.dimension = wgpu::TextureDimension::e2D;
-        textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-        textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-        this->textures[0] = this->gpuBundle->GetDevice().CreateTexture(&textureDesc);
+        rgbaLayers.push_back({std::vector<uint8_t>{255, 255, 255, 255}, 1, 1});
+    }
 
-        uint8_t whitePixel[4] = {255, 255, 255, 255};
+    int commonW = 1, commonH = 1; // Always try to get the largest dimension texture
+    for (uint32_t i = 0; i < numTextures; i++)
+    {
+        commonW = std::max(commonW, rgbaLayers[i].width);
+        commonH = std::max(commonH, rgbaLayers[i].height);
+    }
 
+    // Resize layers (WGPU demands this for a texture array) 
+    for (uint32_t i = 0; i < numTextures; i++)
+    {
+        if (rgbaLayers[i].width != commonW || rgbaLayers[i].height != commonH)
+        {
+            rgbaLayers[i].data = resizeRGBA(rgbaLayers[i].data.data(), rgbaLayers[i].width, rgbaLayers[i].height, commonW, commonH);
+            rgbaLayers[i].width = commonW;
+            rgbaLayers[i].height = commonH;
+        }
+    }
+
+    wgpu::TextureDescriptor textureDesc{};
+    textureDesc.size = {static_cast<uint32_t>(commonW), static_cast<uint32_t>(commonH), numTextures};
+    textureDesc.mipLevelCount = 1;
+    textureDesc.sampleCount = 1;
+    textureDesc.dimension = wgpu::TextureDimension::e2D;
+    textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+    textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    textureDesc.label = "Texture Array";
+
+    this->textures.resize(1);
+    this->textureViews.resize(1);
+    this->textureSamplers.resize(1);
+    this->textures[0] = this->gpuBundle->GetDevice().CreateTexture(&textureDesc);
+
+    for (uint32_t i = 0; i < numTextures; i++)
+    {
         wgpu::TexelCopyTextureInfo dstTexture{};
         dstTexture.texture = this->textures[0];
         dstTexture.mipLevel = 0;
-        dstTexture.origin = {0, 0, 0};
+        dstTexture.origin = {0, 0, i};  // layer index as z origin
+        dstTexture.aspect = wgpu::TextureAspect::All;
 
-        wgpu::TexelCopyBufferLayout srcBufferLayout{};
-        srcBufferLayout.offset = 0;
-        srcBufferLayout.bytesPerRow = 4;
-        srcBufferLayout.rowsPerImage = 1;
+        wgpu::TexelCopyBufferLayout srcLayout{};
+        srcLayout.offset = 0;
+        srcLayout.bytesPerRow = commonW * 4;
+        srcLayout.rowsPerImage = commonH;
 
-        wgpu::Extent3D writeSize{1,1,1};
+        wgpu::Extent3D writeSize{static_cast<uint32_t>(commonW), static_cast<uint32_t>(commonH), 1};
 
-        queue.WriteTexture(&dstTexture, whitePixel, sizeof(whitePixel), &srcBufferLayout, &writeSize);
-        this->textureViews[0] = this->textures[0].CreateView();
-
-        wgpu::SamplerDescriptor samplerDesc{};
-        samplerDesc.magFilter = wgpu::FilterMode::Nearest;
-        samplerDesc.minFilter = wgpu::FilterMode::Nearest;
-        this->textureSamplers[0] = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
+        queue.WriteTexture(&dstTexture, rgbaLayers[i].data.data(), rgbaLayers[i].data.size(), &srcLayout, &writeSize);
     }
 
-    // [9] texture index buffer
+    std::cout << "[Voxelizer] Uploaded " << numTextures << " textures to GPU as a texture array with size " 
+              << commonW << "x" << commonH << " and " << rgbaLayers[0].data.size() / (commonW * commonH * 4) << " channels." << std::endl;
+
+    // Only one view for the entire array needed
+    wgpu::TextureViewDescriptor viewDesc{};
+    viewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+    viewDesc.dimension = wgpu::TextureViewDimension::e2DArray;
+    viewDesc.baseMipLevel = 0;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.baseArrayLayer = 0;
+    viewDesc.arrayLayerCount = numTextures; // HERE: set all layers in the view
+    viewDesc.aspect = wgpu::TextureAspect::All;
+    viewDesc.label = "Texture Array View";
+    this->textureViews[0] = this->textures[0].CreateView(&viewDesc);
+
+    wgpu::SamplerDescriptor samplerDesc{};
+    samplerDesc.addressModeU = wgpu::AddressMode::Repeat;
+    samplerDesc.addressModeV = wgpu::AddressMode::Repeat;
+    samplerDesc.addressModeW = wgpu::AddressMode::Repeat;
+    samplerDesc.magFilter = wgpu::FilterMode::Linear;
+    samplerDesc.minFilter = wgpu::FilterMode::Linear;
+    samplerDesc.mipmapFilter = wgpu::MipmapFilterMode::Nearest;
+    samplerDesc.lodMaxClamp = 1.0f;
+    samplerDesc.lodMinClamp = 0.0f;
+    samplerDesc.compare = wgpu::CompareFunction::Undefined;
+    samplerDesc.maxAnisotropy = 1;
+    samplerDesc.label = "Texture Array Sampler";
+    this->textureSamplers[0] = this->gpuBundle->GetDevice().CreateSampler(&samplerDesc);
+
+    // [10] texture index buffer
     bufferDesc.size = sizeof(uint32_t) * this->facesVec.size();
     bufferDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
     bufferDesc.mappedAtCreation = false;
@@ -738,18 +768,13 @@ bool Voxelizer::voxelizeMesh(const std::string& outputVoxelFile, uint32_t voxelR
             bindGroupDesc.entries = entries;
             wgpu::BindGroup firstBindGroup = device.CreateBindGroup(&bindGroupDesc);
 
-            wgpu::BindGroupEntry textureEntries[MAX_TEXTURES * 2]{}; // One sampler and one texture view per texture
-            for (size_t i = 0; i < MAX_TEXTURES; i++)
-            {
-                size_t srcIdx = (i < this->textureViews.size()) ? i : 0;
-                textureEntries[i * 2].binding = static_cast<uint32_t>(i * 2); // Texture view binding
-                textureEntries[i * 2].textureView = this->textureViews[srcIdx];
-                textureEntries[i * 2 + 1].binding = static_cast<uint32_t>(i * 2 + 1); // Sampler binding
-                textureEntries[i * 2 + 1].sampler = this->textureSamplers[srcIdx];
-            }
+            wgpu::BindGroupEntry textureEntries[2]{}; // One texture array and one sampler
+            textureEntries[0].binding = 0; textureEntries[0].textureView = this->textureViews[0];
+            textureEntries[1].binding = 1; textureEntries[1].sampler = this->textureSamplers[0];
+
             wgpu::BindGroupDescriptor textureBindGroupDesc{};
             textureBindGroupDesc.layout = this->voxelizationPipeline.bindGroupLayouts[1];
-            textureBindGroupDesc.entryCount = MAX_TEXTURES * 2;
+            textureBindGroupDesc.entryCount = 2;
             textureBindGroupDesc.entries = textureEntries;
             wgpu::BindGroup textureBindGroup = device.CreateBindGroup(&textureBindGroupDesc);
 

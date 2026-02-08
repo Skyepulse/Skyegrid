@@ -141,6 +141,10 @@ public:
         brickGrid.clear();
     };
 
+#ifdef __EMSCRIPTEN__
+    void processSingleDiskRead(uint32_t brickGridIndex);
+#endif
+
     void update(WgpuBundle& wgpuBundle, const wgpu::Queue& queue, const wgpu::CommandEncoder& encoder);
     void prepareFeedback(const wgpu::Queue& queue, const wgpu::CommandEncoder& encoder);
     void processAsyncOperations(wgpu::Instance& instance);

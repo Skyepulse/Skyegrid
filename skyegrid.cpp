@@ -6,8 +6,8 @@
 #include <emscripten.h>
 #endif
 
-const int voxel_resolution =  512;
-const int max_visible_bricks =  100000;
+const int voxel_resolution =  1024;
+const int max_visible_bricks =  1;
 
 std::unique_ptr<SkyegridManager> g_manager;
 

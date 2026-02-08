@@ -39,23 +39,28 @@ set(VOXELIZER_SRC_FILES
 )
 
 add_executable(Skyegrid ${SRC_FILES})
-add_executable(Voxelizer ${VOXELIZER_SRC_FILES})
+
+if(NOT EMSCRIPTEN)
+  add_executable(Voxelizer ${VOXELIZER_SRC_FILES})
+endif()
 
 include(FetchContent)
 
-# Assimp
-set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
-set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+# Assimp (only needed for Voxelizer, not for Emscripten)
+if(NOT EMSCRIPTEN)
+  set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+  set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+  set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+  set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
 
-FetchContent_Declare(
-  assimp
-  GIT_REPOSITORY https://github.com/assimp/assimp.git
-  GIT_TAG        v5.4.3
-)
-FetchContent_MakeAvailable(assimp)
+  FetchContent_Declare(
+    assimp
+    GIT_REPOSITORY https://github.com/assimp/assimp.git
+    GIT_TAG        v5.4.3
+  )
+  FetchContent_MakeAvailable(assimp)
+endif()
 
 # ImGUI
 FetchContent_Declare(
@@ -99,10 +104,12 @@ target_include_directories(Skyegrid PRIVATE
 )
 
 # VOXELIZER CONFIGURATION
-target_include_directories(Voxelizer PRIVATE 
-    ${CMAKE_SOURCE_DIR}/includes
-    ${stb_SOURCE_DIR}  # For stb_image.h
-)
+if(NOT EMSCRIPTEN)
+  target_include_directories(Voxelizer PRIVATE 
+      ${CMAKE_SOURCE_DIR}/includes
+      ${stb_SOURCE_DIR}  # For stb_image.h
+  )
+endif()
 # DAWN SPECIFICS
 
 set(DAWN_ROOT "${CMAKE_SOURCE_DIR}/dawn")
@@ -116,29 +123,22 @@ if(EMSCRIPTEN)
   target_compile_definitions(Skyegrid PRIVATE 
     IMGUI_IMPL_WEBGPU_BACKEND_EMSCRIPTEN
   )
-  target_compile_definitions(Voxelizer PRIVATE
-    IMGUI_IMPL_WEBGPU_BACKEND_EMSCRIPTEN
-  )
 
   set(DCMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "" FORCE) # Disable C++ modules for Emscripten
   set_target_properties(Skyegrid PROPERTIES SUFFIX ".html")
-  target_link_libraries(Skyegrid PRIVATE emdawnwebgpu_cpp webgpu_glfw igl::core)
+  target_link_libraries(Skyegrid PRIVATE emdawnwebgpu_cpp webgpu_glfw)
   target_link_options(Skyegrid PRIVATE 
       "-sINITIAL_MEMORY=64MB" 
       "-sALLOW_MEMORY_GROWTH=1" 
       "-sASYNCIFY=1" 
       "-sUSE_GLFW=3" 
       "--preload-file=${CMAKE_SOURCE_DIR}/Shaders@/Shaders"
-      "--preload-file=${CMAKE_SOURCE_DIR}/data@/data"
+      "--preload-file=${CMAKE_SOURCE_DIR}/web-data@/data"
       "--shell-file=${CMAKE_SOURCE_DIR}/shell.html"
       "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
       "-sMODULARIZE=1"
       "-sEXPORT_NAME='createSkyegridModule'"
   )
-  
-  set_target_properties(Voxelizer PROPERTIES SUFFIX ".html")
-  target_link_libraries(Voxelizer PRIVATE emdawnwebgpu_cpp webgpu_glfw assimp)
-  target_link_options(Voxelizer PRIVATE "-sINITIAL_MEMORY=64MB" "-sALLOW_MEMORY_GROWTH=1" "-sASYNCIFY=1" "-sUSE_GLFW=3" "--preload-file=${CMAKE_SOURCE_DIR}/Shaders@/Shaders")
 
 else()
 
